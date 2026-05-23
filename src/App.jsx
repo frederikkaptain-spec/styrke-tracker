@@ -1,30 +1,112 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 
-// ─── ZAPIER WEBHOOK ───────────────────────────────────────────────────────────
-const WEBHOOK_URL = "https://hooks.zapier.com/hooks/catch/27699599/4og973e/";
+// ─── GOOGLE SHEETS LÆSNING ────────────────────────────────────────────────────
+// Sheet'et eksporteres som CSV via Google Sheets' indbyggede export-endpoint.
+// Kræver at sheet er delt som "Anyone with the link can view".
+const SHEET_ID = "1wg53KV9hdsFq46nhDm8kMmx1iZ1NDye5phKYxN6fIjg";
+const SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv`;
 
-async function logSetToExcel(set) {
+// Simpel CSV parser (håndterer quoted values + kommaer i felter)
+function parseCSV(text) {
+  // Strip UTF-8 BOM hvis til stede (Google Sheets eksporterer ofte med det)
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { cell += '"'; i++; } // escaped quote
+        else inQuotes = false;
+      } else {
+        cell += c;
+      }
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ",") { row.push(cell); cell = ""; }
+      else if (c === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; }
+      else if (c === "\r") { /* skip */ }
+      else cell += c;
+    }
+  }
+  if (cell.length || row.length) { row.push(cell); rows.push(row); }
+  // Filtrér helt tomme rækker (fx fra trailing newlines)
+  return rows.filter(r => r.some(c => (c || "").trim() !== ""));
+}
+
+// Hent historiske data fra Google Sheets.
+// Forventet kolonneorden (samme som webhook/Apps Script skriver):
+// Dato | Øvelse | Redskab | Kg | Reps | Reps Mål | Sæt Type | 1RM | Noter
+async function fetchSheetData() {
+  const res = await fetch(SHEET_CSV_URL, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Sheets HTTP ${res.status}`);
+  const text = await res.text();
+  const rows = parseCSV(text);
+  if (!rows.length) return [];
+  // Spring header over hvis første række ligner en header
+  const first = rows[0];
+  const looksLikeHeader = first.some(c =>
+    /^(dato|øvelse|oevelse|exercise|redskab|equipment|kg|reps)/i.test((c || "").trim())
+  );
+  const dataRows = looksLikeHeader ? rows.slice(1) : rows;
+
+  return dataRows
+    .filter(r => r.length >= 2 && (r[0] || "").trim()) // skip tomme rækker
+    .map(r => {
+      const kg = parseFloat((r[3] || "").replace(",", "."));
+      const reps = parseInt(r[4]);
+      return {
+        date: (r[0] || "").trim(),
+        exercise: (r[1] || "").trim(),
+        equipment: (r[2] || "").trim(),
+        kg: Number.isFinite(kg) ? kg : null,
+        reps: Number.isFinite(reps) ? reps : null,
+        repsGoal: (r[5] || "").trim(),
+        setType: (r[6] || "").trim() || "Working",
+        oneRepMax: parseFloat((r[7] || "").replace(",", ".")) || null,
+        notes: (r[8] || "").trim(),
+      };
+    })
+    .filter(r => r.exercise); // skip rækker uden øvelse
+}
+
+// ─── GOOGLE APPS SCRIPT (direkte til Sheets, ingen Zapier) ────────────────────
+// Apps Script deployed som Web App, accepterer POST med JSON og appender en række.
+// Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyXpIDp09oANnSOZoQRCfgn8-JPD2xRNInHpJuN7WJY1kg0W_50NMsLP6oo1ZGNBj6V/exec";
+
+async function logSetToSheet(set) {
+  // Hvis URL'en ikke er sat op endnu, marker som fejl så app falder tilbage på lokal-data
+  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.startsWith("REPLACE_")) {
+    console.warn("Apps Script URL ikke konfigureret — sæt APPS_SCRIPT_URL i src/App.jsx");
+    return false;
+  }
   try {
     const payload = {
       dato: set.date,
       oevelse: set.exercise,
       redskab: set.equipment,
-      kg: set.kg,
-      reps: set.reps,
-      repsmaal: set.repsGoal,
-      saettype: set.setType,
-      orm: set.oneRepMax,
+      kg: String(set.kg),
+      reps: String(set.reps),
+      repsmaal: set.repsGoal || "",
+      saettype: set.setType || "Working",
+      orm: set.oneRepMax != null ? String(set.oneRepMax) : "",
       noter: set.notes || "",
     };
-    await fetch(WEBHOOK_URL, {
+    // Apps Script Web Apps accepterer POST med text/plain content-type
+    // (undgår CORS preflight). Body læses som JSON i scriptet.
+    const res = await fetch(APPS_SCRIPT_URL, {
       method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(payload),
+      redirect: "follow",
     });
+    if (!res.ok) throw new Error(`Apps Script HTTP ${res.status}`);
     return true;
   } catch (e) {
-    console.error("Webhook fejl:", e);
+    console.error("Apps Script skrive-fejl:", e);
     return false;
   }
 }
@@ -194,6 +276,11 @@ export default function App() {
   const [localData, setLocalData] = useState([]);
   const [toast, setToast] = useState(null); // { msg, ok }
 
+  // ── Google Sheets data ──
+  const [sheetData, setSheetData] = useState([]);
+  const [sheetLoading, setSheetLoading] = useState(true);
+  const [sheetError, setSheetError] = useState(null);
+
   // LOG state — multi-sæt session builder
   const today = new Date().toISOString().slice(0, 10);
   const [sessionDate, setSessionDate] = useState(today);
@@ -255,9 +342,50 @@ export default function App() {
     oneRepMax: calc1RM(parseFloat(r[2]), parseInt(r[3])),
   })), []);
 
-  const allRecords = useMemo(() => [...allData, ...localData]
-    .sort((a, b) => (b.date || "").localeCompare(a.date || "")),
-    [allData, localData]);
+  const allRecords = useMemo(() => {
+    // Dedup-key: dato + øvelse + redskab + kg + reps. Sheet vinder over seed.
+    const keyOf = r => `${r.date}|${r.exercise}|${r.equipment}|${r.kg}|${r.reps}`;
+    const sheetKeys = new Set(sheetData.map(keyOf));
+    const seedNotInSheet = allData.filter(r => !sheetKeys.has(keyOf(r)));
+    return [...seedNotInSheet, ...sheetData, ...localData]
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [allData, sheetData, localData]);
+
+  // ── Hent historiske data fra Google Sheets ved opstart ──
+  useEffect(() => {
+    let cancelled = false;
+    setSheetLoading(true);
+    fetchSheetData()
+      .then(data => {
+        if (cancelled) return;
+        setSheetData(data);
+        setSheetError(null);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error("Sheet fetch fejlede:", err);
+        setSheetError(err.message || "Kunne ikke hente data fra Google Sheets");
+      })
+      .finally(() => { if (!cancelled) setSheetLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── Manuel refresh af sheet-data ──
+  const refreshSheet = useCallback(async () => {
+    setSheetLoading(true);
+    try {
+      const data = await fetchSheetData();
+      setSheetData(data);
+      setSheetError(null);
+      showToast(`Hentet ${data.length} sæt fra Sheets ✓`, true);
+    } catch (err) {
+      console.error(err);
+      setSheetError(err.message || "Fejl");
+      showToast("Kunne ikke hente fra Sheets", false);
+    } finally {
+      setSheetLoading(false);
+    }
+  }, []);
 
   // ── best1RM map ──
   const best1RMMap = useMemo(() => {
@@ -343,8 +471,8 @@ export default function App() {
       repsGoal: e.repsGoal, setType: e.setType, notes: e.notes,
       oneRepMax: calc1RM(parseFloat(e.kg), parseInt(e.reps)),
     }));
-    // Send alle sæt parallelt til webhook
-    const results = await Promise.all(records.map(r => logSetToExcel(r)));
+    // Send alle sæt parallelt direkte til Sheets
+    const results = await Promise.all(records.map(r => logSetToSheet(r)));
     const allOk = results.every(Boolean);
     setLocalData(prev => [...prev, ...records]);
     // Nulstil til ét tomt sæt — men husk øvelse/redskab/rep range/sæt type fra sidste sæt
@@ -359,8 +487,8 @@ export default function App() {
     setSaving(false);
     showToast(
       allOk
-        ? `${records.length} sæt gemt i Excel ✓`
-        : "Gemt lokalt (webhook fejl på nogle sæt)",
+        ? `${records.length} sæt gemt i Sheets ✓`
+        : "Kunne ikke gemme i Sheets — gemt lokalt",
       allOk
     );
   }, [entries, sessionDate]);
@@ -440,7 +568,28 @@ export default function App() {
 
       {/* Header */}
       <div style={S.header}>
-        <div style={S.title}>⚡ STYRKE TRACKER</div>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+          <div style={{...S.title, marginBottom:0}}>⚡ STYRKE TRACKER</div>
+          <button
+            onClick={refreshSheet}
+            disabled={sheetLoading}
+            title={sheetError ? `Fejl: ${sheetError}` : `${sheetData.length} sæt hentet fra Sheets`}
+            style={{
+              background:"none", border:"none", cursor:"pointer",
+              fontSize:9, letterSpacing:"0.1em",
+              color: sheetError ? "#ff6b6b" : sheetLoading ? "#666" : "#4a6a00",
+              fontFamily:"'DM Mono', monospace",
+              padding:"4px 8px",
+              opacity: sheetLoading ? 0.6 : 1,
+            }}
+          >
+            {sheetLoading
+              ? "↻ HENTER..."
+              : sheetError
+                ? "⚠ FEJL · GENPRØV"
+                : `↻ ${sheetData.length} SÆT`}
+          </button>
+        </div>
         <div style={S.nav}>
           {[["log","LOG"],["exercises","ØVELSER"],["equipment","REDSKABER"],["history","HISTORIK"],["stats","STATS"]].map(([k,l]) => (
             <button key={k} style={S.navBtn(view===k)} onClick={() => setView(k)}>{l}</button>
@@ -720,7 +869,7 @@ export default function App() {
           </button>
 
           <div style={{ fontSize:9, color:"#333", textAlign:"center", marginTop:6, letterSpacing:"0.08em" }}>
-            Zapier → Træningslog / Google Sheets
+            Direkte til Træningslog / Google Sheets
           </div>
 
           {/* Seneste sæt (denne session, allerede gemt) */}
