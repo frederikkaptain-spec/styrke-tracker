@@ -194,13 +194,39 @@ export default function App() {
   const [localData, setLocalData] = useState([]);
   const [toast, setToast] = useState(null); // { msg, ok }
 
-  // LOG state
+  // LOG state — multi-sæt session builder
   const today = new Date().toISOString().slice(0, 10);
-  const [entry, setEntry] = useState({
-    date: today, exercise: "", equipment: "", kg: "", reps: "",
+  const [sessionDate, setSessionDate] = useState(today);
+  const newSetId = () => `s_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const blankEntry = () => ({
+    id: newSetId(),
+    exercise: "", equipment: "", kg: "", reps: "",
     repsGoal: "8-10", setType: "Working", notes: "",
+    collapsed: false,
   });
+  const [entries, setEntries] = useState([blankEntry()]);
   const [saving, setSaving] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importDay, setImportDay] = useState("");
+
+  // Helper: opdater et enkelt sæt by id
+  const updateEntry = useCallback((id, patch) => {
+    setEntries(prev => prev.map(e => e.id === id ? { ...e, ...patch } : e));
+  }, []);
+  // Setter shim — for code paths der stadig sætter "entry" (fx ØVELSER/REDSKABER tabs)
+  // Opdaterer det sidste sæt i listen (det man arbejder på)
+  const setEntry = useCallback((updater) => {
+    setEntries(prev => {
+      if (!prev.length) return prev;
+      const next = [...prev];
+      const last = next[next.length - 1];
+      const patched = typeof updater === "function" ? updater(last) : { ...last, ...updater };
+      next[next.length - 1] = { ...patched, id: last.id, collapsed: false };
+      return next;
+    });
+  }, []);
+  // For at gøre eksisterende kode der læser "entry" simpelt: vi peger på sidste sæt
+  const entry = entries[entries.length - 1] || blankEntry();
 
   // ØVELSER state
   const [exSearch, setExSearch] = useState("");
@@ -216,6 +242,7 @@ export default function App() {
   // HISTORIK state
   const [histEx, setHistEx] = useState("");
   const [histEq, setHistEq] = useState("");
+  const [expandedDay, setExpandedDay] = useState(null);
 
   // STATS state
   const [statsEx, setStatsEx] = useState("");
@@ -241,6 +268,24 @@ export default function App() {
       if (!map[key] || r.oneRepMax > map[key]) map[key] = r.oneRepMax;
     }
     return map;
+  }, [allRecords]);
+
+  // ── Grupperet pr. dag (til Historik + Import) ──
+  const daysGrouped = useMemo(() => {
+    const map = new Map();
+    for (const r of allRecords) {
+      if (!r.date) continue;
+      if (!map.has(r.date)) map.set(r.date, []);
+      map.get(r.date).push(r);
+    }
+    // Sortér nyeste først
+    return [...map.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([date, records]) => ({
+        date,
+        records,
+        exercises: [...new Set(records.map(r => r.exercise).filter(Boolean))],
+      }));
   }, [allRecords]);
 
   // ── Exercise lists ──
@@ -281,24 +326,112 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   }
 
-  // ── Save set ──
+  // ── Save sets (alle sæt fra session) ──
   const handleSave = useCallback(async () => {
-    if (!entry.exercise || !entry.kg || !entry.reps) {
-      showToast("Udfyld øvelse, kg og reps", false); return;
+    // Validér: alle sæt skal have øvelse, kg, reps
+    const invalid = entries.find(e => !e.exercise || !e.kg || !e.reps);
+    if (invalid) {
+      // Udfold det første ugyldige sæt så brugeren ser hvad der mangler
+      setEntries(prev => prev.map(e => e.id === invalid.id ? { ...e, collapsed: false } : e));
+      showToast("Udfyld øvelse, kg og reps på alle sæt", false);
+      return;
     }
     setSaving(true);
-    const newRecord = {
-      ...entry,
-      kg: parseFloat(entry.kg),
-      reps: parseInt(entry.reps),
-      oneRepMax: calc1RM(parseFloat(entry.kg), parseInt(entry.reps)),
-    };
-    const ok = await logSetToExcel(newRecord);
-    setLocalData(prev => [...prev, newRecord]);
-    setEntry(p => ({ ...p, kg: "", reps: "", notes: "" }));
+    const records = entries.map(e => ({
+      date: sessionDate, exercise: e.exercise, equipment: e.equipment,
+      kg: parseFloat(e.kg), reps: parseInt(e.reps),
+      repsGoal: e.repsGoal, setType: e.setType, notes: e.notes,
+      oneRepMax: calc1RM(parseFloat(e.kg), parseInt(e.reps)),
+    }));
+    // Send alle sæt parallelt til webhook
+    const results = await Promise.all(records.map(r => logSetToExcel(r)));
+    const allOk = results.every(Boolean);
+    setLocalData(prev => [...prev, ...records]);
+    // Nulstil til ét tomt sæt — men husk øvelse/redskab/rep range/sæt type fra sidste sæt
+    const last = entries[entries.length - 1];
+    setEntries([{
+      ...blankEntry(),
+      exercise: last.exercise,
+      equipment: last.equipment,
+      repsGoal: last.repsGoal,
+      setType: last.setType,
+    }]);
     setSaving(false);
-    showToast(ok ? "Sæt gemt i Excel ✓" : "Gemt lokalt (webhook fejl)", ok);
-  }, [entry]);
+    showToast(
+      allOk
+        ? `${records.length} sæt gemt i Excel ✓`
+        : "Gemt lokalt (webhook fejl på nogle sæt)",
+      allOk
+    );
+  }, [entries, sessionDate]);
+
+  // ── Tilføj nyt sæt (arver smart defaults fra det forrige) ──
+  const addSet = useCallback(() => {
+    setEntries(prev => {
+      const last = prev[prev.length - 1];
+      // Kollaps det forrige sæt automatisk
+      const collapsedPrev = prev.map((e, i) =>
+        i === prev.length - 1 ? { ...e, collapsed: true } : e
+      );
+      return [...collapsedPrev, {
+        ...blankEntry(),
+        exercise: last?.exercise || "",
+        equipment: last?.equipment || "",
+        repsGoal: last?.repsGoal || "8-10",
+        setType: last?.setType || "Working",
+      }];
+    });
+  }, []);
+
+  // ── Fjern et sæt ──
+  const removeSet = useCallback((id) => {
+    setEntries(prev => {
+      if (prev.length === 1) {
+        // Hvis det er det eneste tilbage, nulstil det i stedet for at fjerne
+        return [blankEntry()];
+      }
+      return prev.filter(e => e.id !== id);
+    });
+  }, []);
+
+  // ── Toggle collapse ──
+  const toggleCollapse = useCallback((id) => {
+    setEntries(prev => prev.map(e => e.id === id ? { ...e, collapsed: !e.collapsed } : e));
+  }, []);
+
+  // ── Importér tidligere træningsdag ──
+  const importFromDay = useCallback((date) => {
+    if (!date) return;
+    const day = daysGrouped.find(d => d.date === date);
+    if (!day || !day.records.length) return;
+
+    // Byg sæt ud fra dagens records — kg/reps udfyldes på forhånd, brugeren retter til
+    const imported = day.records.map(r => ({
+      id: `s_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      exercise: r.exercise || "",
+      equipment: r.equipment || "",
+      kg: r.kg != null ? String(r.kg) : "",
+      reps: r.reps != null ? String(r.reps) : "",
+      repsGoal: r.repsGoal || "8-10",
+      setType: r.setType || "Working",
+      notes: r.notes || "",
+      collapsed: true, // alle kollapsede så man har overblik
+    }));
+
+    setEntries(prev => {
+      // Hvis nuværende state kun er ét tomt sæt → erstat
+      const isOnlyBlank = prev.length === 1
+        && !prev[0].exercise && !prev[0].kg && !prev[0].reps;
+      if (isOnlyBlank) return imported;
+      // Ellers append så brugeren ikke mister deres arbejde,
+      // og kollaps eksisterende sæt så de nye importerede er tydelige
+      const collapsedExisting = prev.map(e => ({ ...e, collapsed: true }));
+      return [...collapsedExisting, ...imported];
+    });
+    setShowImport(false);
+    setImportDay("");
+    showToast(`${imported.length} sæt importeret — ret kg/reps`, true);
+  }, [daysGrouped]);
 
   // ─── RENDER ────────────────────────────────────────────────────────────────
   return (
@@ -315,110 +448,285 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── LOG ── */}
+      {/* ── LOG (multi-sæt session builder) ── */}
       {view === "log" && (
         <div style={S.page}>
-          <div style={S.card}>
-            <div style={S.sectionTitle}>NYT SÆT</div>
-
-            <div style={{ marginBottom:10 }}>
-              <label style={S.label}>Dato</label>
-              <input type="date" style={S.input} value={entry.date}
-                onChange={e => setEntry(p => ({...p, date: e.target.value}))} />
-            </div>
-
-            <div style={{ marginBottom:10 }}>
-              <label style={S.label}>Øvelse</label>
-              <select style={S.select} value={entry.exercise}
-                onChange={e => setEntry(p => ({...p, exercise: e.target.value, equipment:""}))}>
-                <option value="">— vælg øvelse —</option>
-                {allExercises.map(ex => <option key={ex}>{ex}</option>)}
-              </select>
-            </div>
-
-            <div style={{ marginBottom:10 }}>
-              <label style={S.label}>Redskab</label>
-              <select style={S.select} value={entry.equipment}
-                onChange={e => setEntry(p => ({...p, equipment: e.target.value}))}>
-                <option value="">— vælg redskab —</option>
-                {equipForExercise.map(eq => <option key={eq}>{eq}</option>)}
-              </select>
-            </div>
-
-            {/* 1RM guide */}
-            {bestOrmForEntry && (
-              <div style={S.orm}>
-                <div style={S.ormTitle}>BEDSTE 1RM — {entry.exercise} / {entry.equipment}</div>
-                {[[40,"Opvarm"],[60,"Let"],[80,"Arbejds"]].map(([pct, label]) => (
-                  <div key={pct} style={S.ormRow}>
-                    <span style={S.ormLabel}>{pct}% — {label}</span>
-                    <span style={S.ormValue}>{Math.round(bestOrmForEntry * pct / 100 * 2) / 2} kg</span>
-                  </div>
-                ))}
-                <div style={{...S.ormRow, marginTop:6, borderTop:"1px solid #1a2e00", paddingTop:6}}>
-                  <span style={S.ormLabel}>Bedste 1RM</span>
-                  <span style={{...S.ormValue, fontSize:13}}>{bestOrmForEntry} kg</span>
-                </div>
-              </div>
-            )}
-
-            <div style={{...S.grid2, margin:"10px 0"}}>
-              <div>
-                <label style={S.label}>Kg</label>
-                <input type="number" style={S.input} placeholder="0" value={entry.kg}
-                  onChange={e => setEntry(p => ({...p, kg: e.target.value}))} />
-              </div>
-              <div>
-                <label style={S.label}>Reps</label>
-                <input type="number" style={S.input} placeholder="0" value={entry.reps}
-                  onChange={e => setEntry(p => ({...p, reps: e.target.value}))} />
-              </div>
-            </div>
-
-            {/* Live 1RM */}
-            {liveOrm && (
-              <div style={{ fontSize:10, color:"#b8e840", textAlign:"right", marginBottom:8, letterSpacing:"0.08em" }}>
-                Est. 1RM: <strong>{liveOrm} kg</strong>
-              </div>
-            )}
-
-            <div style={{...S.grid2, marginBottom:10}}>
-              <div>
-                <label style={S.label}>Rep Range</label>
-                <select style={S.select} value={entry.repsGoal}
-                  onChange={e => setEntry(p => ({...p, repsGoal: e.target.value}))}>
-                  {REP_RANGES.map(r => <option key={r}>{r}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={S.label}>Sæt Type</label>
-                <select style={S.select} value={entry.setType}
-                  onChange={e => setEntry(p => ({...p, setType: e.target.value}))}>
-                  {SET_TYPES.map(t => <option key={t}>{t}</option>)}
-                </select>
-              </div>
-            </div>
-
-            <div style={{ marginBottom:12 }}>
-              <label style={S.label}>Noter</label>
-              <input type="text" style={S.input} placeholder="Valgfrit..." value={entry.notes}
-                onChange={e => setEntry(p => ({...p, notes: e.target.value}))} />
-            </div>
-
-            <button style={{...S.btn, width:"100%", opacity: saving ? 0.6 : 1}}
-              onClick={handleSave} disabled={saving}>
-              {saving ? "GEMMER..." : "GEM SÆT → GOOGLE SHEETS"}
-            </button>
-
-            <div style={{ fontSize:9, color:"#333", textAlign:"center", marginTop:6, letterSpacing:"0.08em" }}>
-              Zapier → Træningslog / Google Sheets
-            </div>
+          {/* Session-dato — gælder alle sæt */}
+          <div style={{...S.card, padding:"10px 14px", marginBottom:10}}>
+            <label style={S.label}>Dato for session</label>
+            <input
+              type="date"
+              style={S.input}
+              value={sessionDate}
+              onChange={e => setSessionDate(e.target.value)}
+            />
           </div>
 
-          {/* Seneste sæt */}
+          {/* Importér tidligere træning */}
+          <div style={{ marginBottom:10 }}>
+            <button
+              style={{
+                ...S.btnGhost,
+                width:"100%",
+                padding:"10px",
+                fontSize:10,
+                letterSpacing:"0.12em",
+                color: showImport ? "#b8e840" : "#888",
+                borderColor: showImport ? "#1a2e00" : "#252528",
+              }}
+              onClick={() => setShowImport(s => !s)}
+            >
+              {showImport ? "▲ LUK" : "↓ IMPORTÉR TIDLIGERE TRÆNING"}
+            </button>
+            {showImport && (
+              <div style={{...S.card, marginTop:8, marginBottom:0}}>
+                <label style={S.label}>Vælg træningsdag</label>
+                <select
+                  style={S.select}
+                  value={importDay}
+                  onChange={e => setImportDay(e.target.value)}
+                >
+                  <option value="">— vælg dag —</option>
+                  {daysGrouped.map(d => (
+                    <option key={d.date} value={d.date}>
+                      {d.date} · {d.records.length} sæt · {d.exercises.slice(0, 3).join(", ")}{d.exercises.length > 3 ? "…" : ""}
+                    </option>
+                  ))}
+                </select>
+                <div style={{ fontSize:9, color:"#444", marginTop:8, letterSpacing:"0.05em", lineHeight:1.5 }}>
+                  Kopierer alle sæt fra den valgte dag ind i log. Datoen sættes til {sessionDate}. Ret kg/reps som du tager dem i dag.
+                </div>
+                <button
+                  style={{...S.btn, width:"100%", marginTop:10, opacity: importDay ? 1 : 0.4}}
+                  onClick={() => importFromDay(importDay)}
+                  disabled={!importDay}
+                >
+                  IMPORTÉR →
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+            <div style={{...S.sectionTitle, marginBottom:0, border:"none", padding:0}}>
+              SESSION · {entries.length} {entries.length === 1 ? "sæt" : "sæt"}
+            </div>
+            {entries.length > 1 && (
+              <button
+                style={{...S.btnGhost, padding:"4px 8px", fontSize:9}}
+                onClick={() => setEntries(prev => {
+                  const allCollapsed = prev.every(e => e.collapsed);
+                  return prev.map(e => ({ ...e, collapsed: !allCollapsed }));
+                })}
+              >
+                {entries.every(e => e.collapsed) ? "Fold ud alle" : "Fold ind alle"}
+              </button>
+            )}
+          </div>
+
+          {entries.map((e, idx) => {
+            const eLiveOrm = calc1RM(parseFloat(e.kg), parseInt(e.reps));
+            const eBestOrm = (e.exercise && e.equipment)
+              ? best1RMMap[`${e.exercise}||${e.equipment}`] || null
+              : null;
+            const eEquipForExercise = (() => {
+              if (!e.exercise) return allEquipment;
+              const used = [...new Set(allRecords
+                .filter(r => r.exercise === e.exercise)
+                .map(r => r.equipment).filter(Boolean))];
+              return used.length ? used : allEquipment;
+            })();
+            const isComplete = e.exercise && e.kg && e.reps;
+
+            return (
+              <div key={e.id} style={S.card}>
+                {/* Header: altid synlig — klikbar for at toggle collapse */}
+                <div
+                  style={{
+                    display:"flex", justifyContent:"space-between", alignItems:"center",
+                    cursor:"pointer", userSelect:"none",
+                    marginBottom: e.collapsed ? 0 : 10,
+                  }}
+                  onClick={() => toggleCollapse(e.id)}
+                >
+                  <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0, flex:1 }}>
+                    <span style={{
+                      fontSize:9, color:"#b8e840", letterSpacing:"0.15em",
+                      background:"#1a2a00", padding:"3px 7px", borderRadius:4, fontWeight:600,
+                      flexShrink:0,
+                    }}>
+                      SÆT {idx + 1}
+                    </span>
+                    {e.collapsed ? (
+                      // Kompakt overblik når collapsed
+                      <div style={{ minWidth:0, flex:1, overflow:"hidden" }}>
+                        {isComplete ? (
+                          <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:11 }}>
+                            <span style={{ color:"#e4e4dc", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                              {e.exercise}
+                            </span>
+                            <span style={{ color:"#b8e840", fontWeight:600, whiteSpace:"nowrap" }}>
+                              {e.kg}×{e.reps}
+                            </span>
+                            {eLiveOrm && (
+                              <span style={{ color:"#444", fontSize:10, whiteSpace:"nowrap" }}>
+                                1RM ~{eLiveOrm}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize:11, color:"#555", fontStyle:"italic" }}>
+                            Ikke udfyldt
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize:11, color:"#666" }}>
+                        {isComplete ? "Udfyldt" : "Udfyld felter ↓"}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+                    {entries.length > 1 && (
+                      <button
+                        onClick={(ev) => { ev.stopPropagation(); removeSet(e.id); }}
+                        style={{
+                          background:"none", border:"none", color:"#555",
+                          fontSize:16, cursor:"pointer", padding:"0 4px", lineHeight:1,
+                          fontFamily:"'DM Mono', monospace",
+                        }}
+                        aria-label="Fjern sæt"
+                        title="Fjern sæt"
+                      >×</button>
+                    )}
+                    <span style={{ color:"#444", fontSize:11 }}>{e.collapsed ? "▼" : "▲"}</span>
+                  </div>
+                </div>
+
+                {/* Udfoldet form */}
+                {!e.collapsed && (
+                  <>
+                    <div style={{ marginBottom:10 }}>
+                      <label style={S.label}>Øvelse</label>
+                      <select style={S.select} value={e.exercise}
+                        onChange={ev => updateEntry(e.id, { exercise: ev.target.value, equipment: "" })}>
+                        <option value="">— vælg øvelse —</option>
+                        {allExercises.map(ex => <option key={ex}>{ex}</option>)}
+                      </select>
+                    </div>
+
+                    <div style={{ marginBottom:10 }}>
+                      <label style={S.label}>Redskab</label>
+                      <select style={S.select} value={e.equipment}
+                        onChange={ev => updateEntry(e.id, { equipment: ev.target.value })}>
+                        <option value="">— vælg redskab —</option>
+                        {eEquipForExercise.map(eq => <option key={eq}>{eq}</option>)}
+                      </select>
+                    </div>
+
+                    {/* 1RM guide */}
+                    {eBestOrm && (
+                      <div style={S.orm}>
+                        <div style={S.ormTitle}>BEDSTE 1RM — {e.exercise} / {e.equipment}</div>
+                        {[[40,"Opvarm"],[60,"Let"],[80,"Arbejds"]].map(([pct, label]) => (
+                          <div key={pct} style={S.ormRow}>
+                            <span style={S.ormLabel}>{pct}% — {label}</span>
+                            <span style={S.ormValue}>{Math.round(eBestOrm * pct / 100 * 2) / 2} kg</span>
+                          </div>
+                        ))}
+                        <div style={{...S.ormRow, marginTop:6, borderTop:"1px solid #1a2e00", paddingTop:6}}>
+                          <span style={S.ormLabel}>Bedste 1RM</span>
+                          <span style={{...S.ormValue, fontSize:13}}>{eBestOrm} kg</span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{...S.grid2, margin:"10px 0"}}>
+                      <div>
+                        <label style={S.label}>Kg</label>
+                        <input type="number" style={S.input} placeholder="0" value={e.kg}
+                          onChange={ev => updateEntry(e.id, { kg: ev.target.value })} />
+                      </div>
+                      <div>
+                        <label style={S.label}>Reps</label>
+                        <input type="number" style={S.input} placeholder="0" value={e.reps}
+                          onChange={ev => updateEntry(e.id, { reps: ev.target.value })} />
+                      </div>
+                    </div>
+
+                    {eLiveOrm && (
+                      <div style={{ fontSize:10, color:"#b8e840", textAlign:"right", marginBottom:8, letterSpacing:"0.08em" }}>
+                        Est. 1RM: <strong>{eLiveOrm} kg</strong>
+                      </div>
+                    )}
+
+                    <div style={{...S.grid2, marginBottom:10}}>
+                      <div>
+                        <label style={S.label}>Rep Range</label>
+                        <select style={S.select} value={e.repsGoal}
+                          onChange={ev => updateEntry(e.id, { repsGoal: ev.target.value })}>
+                          {REP_RANGES.map(r => <option key={r}>{r}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={S.label}>Sæt Type</label>
+                        <select style={S.select} value={e.setType}
+                          onChange={ev => updateEntry(e.id, { setType: ev.target.value })}>
+                          {SET_TYPES.map(t => <option key={t}>{t}</option>)}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom:4 }}>
+                      <label style={S.label}>Noter</label>
+                      <input type="text" style={S.input} placeholder="Valgfrit..." value={e.notes}
+                        onChange={ev => updateEntry(e.id, { notes: ev.target.value })} />
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Tilføj sæt-knap */}
+          <button
+            style={{
+              ...S.btnGhost,
+              width:"100%",
+              padding:"12px",
+              fontSize:11,
+              letterSpacing:"0.12em",
+              fontWeight:600,
+              color:"#b8e840",
+              borderColor:"#1a2e00",
+              borderStyle:"dashed",
+              background:"transparent",
+              marginBottom:10,
+            }}
+            onClick={addSet}
+          >
+            + TILFØJ SÆT
+          </button>
+
+          {/* Gem-knap */}
+          <button
+            style={{...S.btn, width:"100%", opacity: saving ? 0.6 : 1}}
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saving
+              ? "GEMMER..."
+              : `GEM ${entries.length} ${entries.length === 1 ? "SÆT" : "SÆT"} → GOOGLE SHEETS`}
+          </button>
+
+          <div style={{ fontSize:9, color:"#333", textAlign:"center", marginTop:6, letterSpacing:"0.08em" }}>
+            Zapier → Træningslog / Google Sheets
+          </div>
+
+          {/* Seneste sæt (denne session, allerede gemt) */}
           {localData.length > 0 && (
-            <div style={S.card}>
-              <div style={S.sectionTitle}>DENNE SESSION</div>
+            <div style={{...S.card, marginTop:14}}>
+              <div style={S.sectionTitle}>GEMT I DAG</div>
               {[...localData].reverse().map((r, i) => (
                 <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #161618" }}>
                   <div>
@@ -576,7 +884,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── HISTORIK ── */}
+      {/* ── HISTORIK (grupperet pr. dag) ── */}
       {view === "history" && (
         <div style={S.page}>
           <div style={{...S.grid2, marginBottom:12}}>
@@ -589,26 +897,85 @@ export default function App() {
               {allEquipment.map(eq => <option key={eq}>{eq}</option>)}
             </select>
           </div>
-          {allRecords
-            .filter(r => (!histEx || r.exercise === histEx) && (!histEq || r.equipment === histEq))
-            .slice(0, 100)
-            .map((r, i) => {
-              const isPR = r.oneRepMax && best1RMMap[`${r.exercise}||${r.equipment}`] === r.oneRepMax;
+          {(() => {
+            // Filtrér dage så de kun viser sæt der matcher filter (og skjul dage uden match)
+            const filteredDays = daysGrouped
+              .map(d => ({
+                ...d,
+                records: d.records.filter(r =>
+                  (!histEx || r.exercise === histEx) &&
+                  (!histEq || r.equipment === histEq)
+                ),
+              }))
+              .filter(d => d.records.length > 0)
+              .slice(0, 60);
+
+            if (!filteredDays.length) {
               return (
-                <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:"1px solid #161618" }}>
-                  <div>
-                    <div style={{ fontSize:12, color:"#e4e4dc" }}>{r.exercise}
-                      {isPR && <span style={{...S.tagGreen, marginLeft:6}}>PR</span>}
-                    </div>
-                    <div style={{ fontSize:10, color:"#444", marginTop:1 }}>{r.equipment} · {r.date}</div>
-                  </div>
-                  <div style={{ textAlign:"right" }}>
-                    <div style={{ fontSize:13, color:"#b8e840", fontWeight:600 }}>{r.kg} kg × {r.reps}</div>
-                    {r.oneRepMax && <div style={{ fontSize:9, color:"#444" }}>1RM ~{r.oneRepMax}</div>}
-                  </div>
+                <div style={{ color:"#444", fontSize:12, textAlign:"center", marginTop:40 }}>
+                  Ingen sæt matcher filteret
                 </div>
               );
-            })}
+            }
+
+            return filteredDays.map(day => {
+              const isOpen = expandedDay === day.date;
+              const exercisesForDay = [...new Set(day.records.map(r => r.exercise).filter(Boolean))];
+              return (
+                <div key={day.date} style={S.card}>
+                  {/* Dag-header (klikbar) */}
+                  <div
+                    style={{ display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer", userSelect:"none" }}
+                    onClick={() => setExpandedDay(isOpen ? null : day.date)}
+                  >
+                    <div style={{ minWidth:0, flex:1 }}>
+                      <div style={{ fontSize:13, color:"#e4e4dc", fontWeight:600 }}>{day.date}</div>
+                      <div style={{ fontSize:10, color:"#555", marginTop:2 }}>
+                        {day.records.length} sæt · {exercisesForDay.slice(0, 3).join(", ")}{exercisesForDay.length > 3 ? "…" : ""}
+                      </div>
+                    </div>
+                    <span style={{ color:"#444", fontSize:12, flexShrink:0, marginLeft:8 }}>{isOpen ? "▲" : "▼"}</span>
+                  </div>
+
+                  {/* Sæt-liste for dagen */}
+                  {isOpen && (
+                    <div style={{ marginTop:10, borderTop:"1px solid #1a1a1e", paddingTop:8 }}>
+                      {day.records.map((r, i) => {
+                        const isPR = r.oneRepMax && best1RMMap[`${r.exercise}||${r.equipment}`] === r.oneRepMax;
+                        return (
+                          <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #161618" }}>
+                            <div style={{ minWidth:0, flex:1 }}>
+                              <div style={{ fontSize:12, color:"#e4e4dc" }}>
+                                {r.exercise}
+                                {isPR && <span style={{...S.tagGreen, marginLeft:6}}>PR</span>}
+                              </div>
+                              <div style={{ fontSize:10, color:"#444", marginTop:1 }}>{r.equipment}</div>
+                            </div>
+                            <div style={{ textAlign:"right", flexShrink:0 }}>
+                              <div style={{ fontSize:13, color:"#b8e840", fontWeight:600 }}>{r.kg} kg × {r.reps}</div>
+                              {r.oneRepMax && <div style={{ fontSize:9, color:"#444" }}>1RM ~{r.oneRepMax}</div>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {/* Hurtig-knap: importér dagen til LOG */}
+                      <button
+                        style={{...S.btnGhost, width:"100%", marginTop:10, padding:"8px", fontSize:10, color:"#b8e840", borderColor:"#1a2e00"}}
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          importFromDay(day.date);
+                          setView("log");
+                          setExpandedDay(null);
+                        }}
+                      >
+                        ↓ IMPORTÉR DENNE DAG TIL LOG
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            });
+          })()}
         </div>
       )}
 
