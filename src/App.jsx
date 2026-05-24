@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxo_D38xKCKSjbZFlegQtlFx-mGDT7X8elR4AQWXJpHFJIUgDKRU8hyVXPmWrP6uICh/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzq2AXvn-vxkhqBRBT_GMDEFMLZvjbWjounNbNHzRkPzfswXhG0lBuvoGO3mo68NBDj/exec";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
@@ -72,7 +72,7 @@ async function fetchSetsFromCSV() {
         kg: Number.isFinite(kg) ? kg : null,
         reps: Number.isFinite(reps) ? reps : null,
         repsGoal: (r[5 + offset] || "").trim(),
-        setType: (r[6 + offset] || "").trim() || "Almindeligt sæt",
+        setType: (r[6 + offset] || "").trim() || "NORMAL SET",
         oneRepMax: parseFloat((r[7 + offset] || "").replace(",", ".")) || null,
         notes: (r[8 + offset] || "").trim(),
       };
@@ -149,7 +149,7 @@ async function logSetToSheet(set) {
     kg: String(set.kg),
     reps: String(set.reps),
     repsmaal: set.repsGoal || "",
-    saettype: set.setType || "Almindeligt sæt",
+    saettype: set.setType || "NORMAL SET",
     orm: set.oneRepMax != null ? String(set.oneRepMax) : "",
     noter: set.notes || "",
   });
@@ -201,10 +201,10 @@ const SEED_DATA = [];
 const ALL_EXERCISES = [];
 const ALL_EQUIPMENT = [];
 
-// Handles til CABLE TOWER. Bruges som ekstra valg når redskab = CABLE TOWER.
-const HANDLES = ["ROPE", "BAR", "HANDLE", "WIDE GRIB HANDLE"];
+const SET_TYPES = ["NORMAL SET","WARM-UP SET","DROP SET","AMRAP"];
 
-const SET_TYPES = ["Almindeligt sæt","Warm-up","Drop Set","AMRAP","Failure","Working"];
+// Handles til CABLE TOWER. Bruges som ekstra valg når redskab = CABLE TOWER.
+const HANDLES = ["ROPE", "BAR", "CLOSE GRIP HANDLE", "WIDE GRIP HANDLE"];
 const REP_RANGES = ["1-3","3-5","4-5","5","5-8","6-8","8-10","8-12","10-12","10-15","12-15","15-20","20-30","30-60 sek."];
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
@@ -323,7 +323,7 @@ export default function App() {
   const blankEntry = () => ({
     id: newSetId(),
     exercise: "", equipment: "", handle: "", kg: "", reps: "",
-    repsGoal: "8-10", setType: "Almindeligt sæt", notes: "",
+    repsGoal: "8-10", setType: "NORMAL SET", notes: "",
     collapsed: false,
   });
   const [entries, setEntries] = useState([blankEntry()]);
@@ -368,6 +368,12 @@ export default function App() {
   const [newEqName, setNewEqName] = useState("");
   const [savingEq, setSavingEq] = useState(false);
 
+  // GYMS (centre) state
+  const [gymSearch, setGymSearch] = useState("");
+  const [showAddGym, setShowAddGym] = useState(false);
+  const [newGymName, setNewGymName] = useState("");
+  const [savingGym, setSavingGym] = useState(false);
+
   // HISTORIK state
   const [histEx, setHistEx] = useState("");
   const [histEq, setHistEq] = useState("");
@@ -410,7 +416,7 @@ export default function App() {
       .catch(err => {
         if (cancelled) return;
         console.error("Sheet fetch fejlede:", err);
-        setSheetError(err.message || "Kunne ikke hente data fra Google Sheets");
+        setSheetError(err.message || "Could not load data from Google Sheets");
       })
       .finally(() => { if (!cancelled) setSheetLoading(false); });
     return () => { cancelled = true; };
@@ -426,11 +432,11 @@ export default function App() {
       setSheetEquipment(equipment);
       setSheetCenters(centers || []);
       setSheetError(null);
-      showToast(`Hentet ${sets.length} sæt fra Sheets ✓`, true);
+      showToast(`${sets.length} sets loaded ✓`, true);
     } catch (err) {
       console.error(err);
       setSheetError(err.message || "Fejl");
-      showToast("Kunne ikke hente fra Sheets", false);
+      showToast("Could not load from Sheets", false);
     } finally {
       setSheetLoading(false);
     }
@@ -460,13 +466,13 @@ export default function App() {
       });
       setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment("");
       setShowAddEx(false);
-      showToast(`"${name}" tilføjet ✓`, true);
+      showToast(`"${name}" added ✓`, true);
     } else {
       // Fallback: gem lokalt så brugeren ikke mister det
       setCustomExercises(p => [...p, name]);
       setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment("");
       setShowAddEx(false);
-      showToast("Kunne ikke gemme i Sheets — kun lokalt", false);
+      showToast("Could not save to Sheets — local only", false);
     }
     setSavingEx(false);
   }, [newExName, newExPrimary, newExSecondary, newExEquipment]);
@@ -484,14 +490,36 @@ export default function App() {
       });
       setNewEqName("");
       setShowAddEq(false);
-      showToast(`"${name}" tilføjet ✓`, true);
+      showToast(`"${name}" added ✓`, true);
     } else {
       setNewEqName("");
       setShowAddEq(false);
-      showToast("Kunne ikke gemme i Sheets", false);
+      showToast("Could not save to Sheets", false);
     }
     setSavingEq(false);
   }, [newEqName]);
+
+  // ── Tilføj nyt gym (gemmes i Sheets, Centre-arket) ──
+  const handleAddGym = useCallback(async () => {
+    const name = newGymName.trim();
+    if (!name) return;
+    setSavingGym(true);
+    const ok = await saveCenterToSheet({ name });
+    if (ok) {
+      setSheetCenters(prev => {
+        if (prev.some(e => e.name.toLowerCase() === name.toLowerCase())) return prev;
+        return [...prev, { name }];
+      });
+      setNewGymName("");
+      setShowAddGym(false);
+      showToast(`"${name}" added ✓`, true);
+    } else {
+      setNewGymName("");
+      setShowAddGym(false);
+      showToast("Could not save to Sheets", false);
+    }
+    setSavingGym(false);
+  }, [newGymName]);
 
   // ── best1RM map ──
   // Nøgle: exercise|equipment|handle|center — så samme øvelse på forskellig handle/center
@@ -615,7 +643,7 @@ export default function App() {
     if (invalid) {
       // Udfold det første ugyldige sæt så brugeren ser hvad der mangler
       setEntries(prev => prev.map(e => e.id === invalid.id ? { ...e, collapsed: false } : e));
-      showToast("Udfyld øvelse, kg og reps på alle sæt", false);
+      showToast("Fill in exercise, kg and reps for all sets", false);
       return;
     }
     setSaving(true);
@@ -644,8 +672,8 @@ export default function App() {
     setSaving(false);
     showToast(
       allOk
-        ? `${records.length} sæt gemt i Sheets ✓`
-        : "Kunne ikke gemme i Sheets — gemt lokalt",
+        ? `${records.length} sets saved ✓`
+        : "Could not save to Sheets — saved locally",
       allOk
     );
   }, [entries, sessionDate, sessionCenter]);
@@ -664,7 +692,7 @@ export default function App() {
         equipment: last?.equipment || "",
         handle: last?.handle || "",
         repsGoal: last?.repsGoal || "8-10",
-        setType: last?.setType || "Almindeligt sæt",
+        setType: last?.setType || "NORMAL SET",
       }];
     });
   }, []);
@@ -700,7 +728,7 @@ export default function App() {
       kg: r.kg != null ? String(r.kg) : "",
       reps: r.reps != null ? String(r.reps) : "",
       repsGoal: r.repsGoal || "8-10",
-      setType: r.setType || "Almindeligt sæt",
+      setType: r.setType || "NORMAL SET",
       notes: r.notes || "",
       collapsed: true,
     }));
@@ -723,7 +751,7 @@ export default function App() {
     });
     setShowImport(false);
     setImportDay("");
-    showToast(`${imported.length} sæt importeret — ret kg/reps`, true);
+    showToast(`${imported.length} sets imported — adjust kg/reps`, true);
   }, [daysGrouped]);
 
   // ─── RENDER ────────────────────────────────────────────────────────────────
@@ -738,7 +766,7 @@ export default function App() {
           <button
             onClick={refreshSheet}
             disabled={sheetLoading}
-            title={sheetError ? `Fejl: ${sheetError}` : `${sheetData.length} sæt hentet fra Sheets`}
+            title={sheetError ? `Error: ${sheetError}` : `${sheetData.length} sets loaded from Sheets`}
             style={{
               background:"none", border:"none", cursor:"pointer",
               fontSize:9, letterSpacing:"0.1em",
@@ -749,17 +777,25 @@ export default function App() {
             }}
           >
             {sheetLoading
-              ? "↻ HENTER..."
+              ? "↻ LOADING..."
               : sheetError
-                ? "⚠ FEJL · GENPRØV"
+                ? "⚠ ERROR · TRY AGAIN"
                 : `↻ ${sheetData.length} SÆT`}
           </button>
         </div>
         <div style={S.nav}>
-          {[["log","LOG"],["exercises","ØVELSER"],["equipment","REDSKABER"],["history","HISTORIK"],["stats","STATS"]].map(([k,l]) => (
-            <button key={k} style={S.navBtn(view===k)} onClick={() => setView(k)}>{l}</button>
+          {[["log","LOG"],["resources","RESOURCES"],["history","HISTORY"],["insights","INSIGHTS"]].map(([k,l]) => (
+            <button key={k} style={S.navBtn(view===k || (k==="resources" && ["exercises","equipment","gyms"].includes(view)))} onClick={() => setView(k === "resources" ? "exercises" : k)}>{l}</button>
           ))}
         </div>
+        {/* Sub-nav for RESOURCES */}
+        {["exercises","equipment","gyms"].includes(view) && (
+          <div style={{...S.nav, marginTop:8, paddingLeft:8, borderLeft:"2px solid #1a2e00"}}>
+            {[["exercises","EXERCISES"],["equipment","EQUIPMENT"],["gyms","GYMS"]].map(([k,l]) => (
+              <button key={k} style={{...S.navBtn(view===k), fontSize:10}} onClick={() => setView(k)}>{l}</button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Fejl-banner — vises under header når data ikke kan hentes */}
@@ -769,22 +805,22 @@ export default function App() {
           padding:"10px 12px", margin:"0 0 12px 0",
           fontSize:11, color:"#ff9999", lineHeight:1.5,
         }}>
-          <div style={{ fontWeight:600, marginBottom:4, color:"#ff6b6b" }}>Kunne ikke hente data fra Google Sheets</div>
+          <div style={{ fontWeight:600, marginBottom:4, color:"#ff6b6b" }}>Could not load data from Google Sheets</div>
           <div style={{ fontSize:10, color:"#cc8888" }}>{sheetError}</div>
           <div style={{ fontSize:9, color:"#774444", marginTop:6, letterSpacing:"0.05em" }}>
-            Tjek at Apps Script er deployed med "Anyone" access og at URL'en i App.jsx er korrekt.
+            Check that Apps Script is deployed with "Anyone" access and that the URL in App.jsx is correct.
           </div>
         </div>
       )}
 
-      {/* ── LOG (multi-sæt session builder) ── */}
+      {/* ── LOG (multi-set session builder) ── */}
       {view === "log" && (
         <div style={S.page}>
-          {/* Session: dato + center — gælder alle sæt */}
+          {/* Session: date + gym — applies to all sets */}
           <div style={{...S.card, padding:"10px 14px", marginBottom:10}}>
             <div style={{...S.grid2}}>
               <div>
-                <label style={S.label}>Dato</label>
+                <label style={S.label}>DATE</label>
                 <input
                   type="date"
                   style={S.input}
@@ -793,13 +829,13 @@ export default function App() {
                 />
               </div>
               <div>
-                <label style={S.label}>Center</label>
+                <label style={S.label}>GYM</label>
                 <select
                   style={S.select}
                   value={sessionCenter}
                   onChange={e => setSessionCenter(e.target.value)}
                 >
-                  <option value="">— vælg center —</option>
+                  <option value="">— CHOOSE GYM —</option>
                   {sheetCenters.map(c => <option key={c.name}>{c.name}</option>)}
                 </select>
               </div>
@@ -820,25 +856,25 @@ export default function App() {
               }}
               onClick={() => setShowImport(s => !s)}
             >
-              {showImport ? "▲ LUK" : "↓ IMPORTÉR TIDLIGERE TRÆNING"}
+              {showImport ? "▲ CLOSE" : "↓ IMPORT EARLIER SESSION"}
             </button>
             {showImport && (
               <div style={{...S.card, marginTop:8, marginBottom:0}}>
-                <label style={S.label}>Vælg træningsdag</label>
+                <label style={S.label}>CHOOSE EARLIER SESSION</label>
                 <select
                   style={S.select}
                   value={importDay}
                   onChange={e => setImportDay(e.target.value)}
                 >
-                  <option value="">— vælg dag —</option>
+                  <option value="">— CHOOSE DAY —</option>
                   {daysGrouped.map(d => (
                     <option key={d.date} value={d.date}>
-                      {d.date} · {d.records.length} sæt · {d.exercises.slice(0, 3).join(", ")}{d.exercises.length > 3 ? "…" : ""}
+                      {d.date} · {d.records.length} sets · {d.exercises.slice(0, 3).join(", ")}{d.exercises.length > 3 ? "…" : ""}
                     </option>
                   ))}
                 </select>
                 <div style={{ fontSize:9, color:"#444", marginTop:8, letterSpacing:"0.05em", lineHeight:1.5 }}>
-                  Kopierer alle sæt fra den valgte dag ind i log. Datoen sættes til {sessionDate}. Ret kg/reps som du tager dem i dag.
+                  Copies all sets from the chosen day into the log. Date is set to {sessionDate}. Adjust kg/reps as you do them today.
                 </div>
                 <button
                   style={{...S.btn, width:"100%", marginTop:10, opacity: importDay ? 1 : 0.4}}
@@ -853,7 +889,7 @@ export default function App() {
 
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
             <div style={{...S.sectionTitle, marginBottom:0, border:"none", padding:0}}>
-              SESSION · {entries.length} {entries.length === 1 ? "sæt" : "sæt"}
+              SESSION · {entries.length} {entries.length === 1 ? "set" : "sets"}
             </div>
             {entries.length > 1 && (
               <button
@@ -863,7 +899,7 @@ export default function App() {
                   return prev.map(e => ({ ...e, collapsed: !allCollapsed }));
                 })}
               >
-                {entries.every(e => e.collapsed) ? "Fold ud alle" : "Fold ind alle"}
+                {entries.every(e => e.collapsed) ? "Expand all" : "Collapse all"}
               </button>
             )}
           </div>
@@ -912,7 +948,7 @@ export default function App() {
                           </div>
                         ) : (
                           <div style={{ fontSize:11, color:"#555", fontStyle:"italic" }}>
-                            Ikke udfyldt
+                            Not filled
                           </div>
                         )}
                       </div>
@@ -931,8 +967,8 @@ export default function App() {
                           fontSize:16, cursor:"pointer", padding:"0 4px", lineHeight:1,
                           fontFamily:"'DM Mono', monospace",
                         }}
-                        aria-label="Fjern sæt"
-                        title="Fjern sæt"
+                        aria-label="Remove set"
+                        title="Remove set"
                       >×</button>
                     )}
                     <span style={{ color:"#444", fontSize:11 }}>{e.collapsed ? "▼" : "▲"}</span>
@@ -943,23 +979,23 @@ export default function App() {
                 {!e.collapsed && (
                   <>
                     <div style={{ marginBottom:10 }}>
-                      <label style={S.label}>Øvelse</label>
+                      <label style={S.label}>EXERCISE</label>
                       <select style={S.select} value={e.exercise}
                         onChange={ev => updateEntry(e.id, { exercise: ev.target.value, equipment: "", handle: "" })}>
-                        <option value="">— vælg øvelse —</option>
+                        <option value="">— CHOOSE EXERCISE —</option>
                         {allExercises.map(ex => <option key={ex}>{ex}</option>)}
                       </select>
                     </div>
 
                     <div style={{ marginBottom:10 }}>
-                      <label style={S.label}>Redskab</label>
+                      <label style={S.label}>EQUIPMENT</label>
                       <select style={S.select} value={e.equipment}
                         onChange={ev => updateEntry(e.id, {
                           equipment: ev.target.value,
                           // Nulstil handle hvis ikke CABLE TOWER
                           handle: ev.target.value === "CABLE TOWER" ? e.handle : "",
                         })}>
-                        <option value="">— vælg redskab —</option>
+                        <option value="">— CHOOSE EQUIPMENT —</option>
                         {eEquipForExercise.map(eq => <option key={eq}>{eq}</option>)}
                       </select>
                     </div>
@@ -967,10 +1003,10 @@ export default function App() {
                     {/* Handle-dropdown vises kun for CABLE TOWER */}
                     {e.equipment === "CABLE TOWER" && (
                       <div style={{ marginBottom:10 }}>
-                        <label style={S.label}>Handle</label>
+                        <label style={S.label}>HANDLE</label>
                         <select style={S.select} value={e.handle || ""}
                           onChange={ev => updateEntry(e.id, { handle: ev.target.value })}>
-                          <option value="">— vælg handle —</option>
+                          <option value="">— CHOOSE HANDLE —</option>
                           {HANDLES.map(h => <option key={h}>{h}</option>)}
                         </select>
                       </div>
@@ -979,15 +1015,15 @@ export default function App() {
                     {/* 1RM guide */}
                     {eBestOrm && (
                       <div style={S.orm}>
-                        <div style={S.ormTitle}>BEDSTE 1RM — {e.exercise} / {e.equipment}</div>
-                        {[[40,"Opvarm"],[60,"Let"],[80,"Arbejds"]].map(([pct, label]) => (
+                        <div style={S.ormTitle}>BEST 1RM — {e.exercise} / {e.equipment}</div>
+                        {[[40,"Warm-up"],[60,"Light"],[80,"Working"]].map(([pct, label]) => (
                           <div key={pct} style={S.ormRow}>
                             <span style={S.ormLabel}>{pct}% — {label}</span>
                             <span style={S.ormValue}>{Math.round(eBestOrm * pct / 100 * 2) / 2} kg</span>
                           </div>
                         ))}
                         <div style={{...S.ormRow, marginTop:6, borderTop:"1px solid #1a2e00", paddingTop:6}}>
-                          <span style={S.ormLabel}>Bedste 1RM</span>
+                          <span style={S.ormLabel}>Best 1RM</span>
                           <span style={{...S.ormValue, fontSize:13}}>{eBestOrm} kg</span>
                         </div>
                       </div>
@@ -1000,7 +1036,7 @@ export default function App() {
                           onChange={ev => updateEntry(e.id, { kg: ev.target.value })} />
                       </div>
                       <div>
-                        <label style={S.label}>Reps</label>
+                        <label style={S.label}>REPS</label>
                         <input type="number" style={S.input} placeholder="0" value={e.reps}
                           onChange={ev => updateEntry(e.id, { reps: ev.target.value })} />
                       </div>
@@ -1014,14 +1050,14 @@ export default function App() {
 
                     <div style={{...S.grid2, marginBottom:10}}>
                       <div>
-                        <label style={S.label}>Rep Range</label>
+                        <label style={S.label}>REP RANGE</label>
                         <select style={S.select} value={e.repsGoal}
                           onChange={ev => updateEntry(e.id, { repsGoal: ev.target.value })}>
                           {REP_RANGES.map(r => <option key={r}>{r}</option>)}
                         </select>
                       </div>
                       <div>
-                        <label style={S.label}>Sæt Type</label>
+                        <label style={S.label}>SET TYPE</label>
                         <select style={S.select} value={e.setType}
                           onChange={ev => updateEntry(e.id, { setType: ev.target.value })}>
                           {SET_TYPES.map(t => <option key={t}>{t}</option>)}
@@ -1030,8 +1066,8 @@ export default function App() {
                     </div>
 
                     <div style={{ marginBottom:4 }}>
-                      <label style={S.label}>Noter</label>
-                      <input type="text" style={S.input} placeholder="Valgfrit..." value={e.notes}
+                      <label style={S.label}>NOTES</label>
+                      <input type="text" style={S.input} placeholder="Optional..." value={e.notes}
                         onChange={ev => updateEntry(e.id, { notes: ev.target.value })} />
                     </div>
                   </>
@@ -1040,7 +1076,7 @@ export default function App() {
             );
           })}
 
-          {/* Tilføj sæt-knap */}
+          {/* Add set button */}
           <button
             style={{
               ...S.btnGhost,
@@ -1057,7 +1093,7 @@ export default function App() {
             }}
             onClick={addSet}
           >
-            + TILFØJ SÆT
+            + ADD SET
           </button>
 
           {/* Gem-knap */}
@@ -1067,18 +1103,18 @@ export default function App() {
             disabled={saving}
           >
             {saving
-              ? "GEMMER..."
-              : `GEM ${entries.length} ${entries.length === 1 ? "SÆT" : "SÆT"} → GOOGLE SHEETS`}
+              ? "SAVING..."
+              : `SAVE ${entries.length} ${entries.length === 1 ? "SET" : "SETS"}`}
           </button>
 
           <div style={{ fontSize:9, color:"#333", textAlign:"center", marginTop:6, letterSpacing:"0.08em" }}>
-            Direkte til Træningslog / Google Sheets
+            Saved directly to Google Sheets
           </div>
 
-          {/* Seneste sæt (denne session, allerede gemt) */}
+          {/* Latest sets (this session, already saved) */}
           {localData.length > 0 && (
             <div style={{...S.card, marginTop:14}}>
-              <div style={S.sectionTitle}>GEMT I DAG</div>
+              <div style={S.sectionTitle}>SESSION LOG</div>
               {[...localData].reverse().map((r, i) => (
                 <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #161618" }}>
                   <div>
@@ -1100,39 +1136,39 @@ export default function App() {
       {view === "exercises" && (
         <div style={S.page}>
           <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-            <input style={{...S.input, flex:1}} placeholder="Søg øvelse..." value={exSearch}
+            <input style={{...S.input, flex:1}} placeholder="Search exercise..." value={exSearch}
               onChange={e => setExSearch(e.target.value)} />
             <button style={S.btnGhost} onClick={() => setShowAddEx(!showAddEx)}>+</button>
           </div>
           {showAddEx && (
             <div style={{...S.card, marginBottom:10}}>
-              <label style={S.label}>Ny øvelse</label>
+              <label style={S.label}>NEW EXERCISE</label>
               <input style={{...S.input, marginBottom:8}} value={newExName}
-                onChange={e => setNewExName(e.target.value)} placeholder="Navn (fx BENCH PRESS)..." />
-              <label style={S.label}>Primær muskel</label>
+                onChange={e => setNewExName(e.target.value)} placeholder="Name (e.g. BENCH PRESS)..." />
+              <label style={S.label}>PRIMARY MUSCLE</label>
               <input style={{...S.input, marginBottom:8}} value={newExPrimary}
-                onChange={e => setNewExPrimary(e.target.value)} placeholder="Fx CHEST" />
-              <label style={S.label}>Sekundær muskler</label>
+                onChange={e => setNewExPrimary(e.target.value)} placeholder="e.g. CHEST" />
+              <label style={S.label}>SECONDARY MUSCLES</label>
               <input style={{...S.input, marginBottom:8}} value={newExSecondary}
-                onChange={e => setNewExSecondary(e.target.value)} placeholder="Fx TRICEPS, SHOULDERS (komma-separeret)" />
-              <label style={S.label}>Redskaber</label>
+                onChange={e => setNewExSecondary(e.target.value)} placeholder="e.g. TRICEPS, SHOULDERS (comma-separated)" />
+              <label style={S.label}>EQUIPMENT</label>
               <input style={{...S.input, marginBottom:10}} value={newExEquipment}
-                onChange={e => setNewExEquipment(e.target.value)} placeholder="Fx BARBELL, DUMBBELLS (komma-separeret)" />
+                onChange={e => setNewExEquipment(e.target.value)} placeholder="e.g. BARBELL, DUMBBELLS (comma-separated)" />
               <div style={{ display:"flex", gap:8 }}>
                 <button
                   style={{...S.btn, flex:1, opacity: savingEx ? 0.6 : 1}}
                   onClick={handleAddExercise}
                   disabled={savingEx || !newExName.trim()}
                 >
-                  {savingEx ? "GEMMER..." : "TILFØJ TIL SHEETS"}
+                  {savingEx ? "SAVING..." : "SAVE"}
                 </button>
                 <button
                   style={S.btnGhost}
                   onClick={() => { setShowAddEx(false); setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); }}
-                >Annuller</button>
+                >Cancel</button>
               </div>
               <div style={{ fontSize:9, color:"#444", marginTop:8, letterSpacing:"0.05em" }}>
-                Gemmes i Øvelser-arket. Redskaberne bestemmer hvilke valg du får når du logger denne øvelse.
+                Saved to the Exercises sheet. The equipment list determines which options you see when logging this exercise.
               </div>
             </div>
           )}
@@ -1151,7 +1187,7 @@ export default function App() {
                     onClick={() => setExpandedEx(key ? null : ex)}>
                     <div>
                       <div style={{ fontSize:13 }}>{ex}</div>
-                      {eqList.length > 0 && <div style={{ fontSize:10, color:"#444", marginTop:2 }}>{eqList.length} redskaber</div>}
+                      {eqList.length > 0 && <div style={{ fontSize:10, color:"#444", marginTop:2 }}>{eqList.length} equipment</div>}
                     </div>
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                       {bestOrm && <span style={S.tagGreen}>{bestOrm} kg 1RM</span>}
@@ -1168,12 +1204,12 @@ export default function App() {
                           <div style={{ marginBottom:12, padding:"8px 10px", background:"#0d1700", borderRadius:4, border:"1px solid #1a2e00" }}>
                             {m.primaryMuscle && (
                               <div style={{ fontSize:10, color:"#888", letterSpacing:"0.1em", marginBottom:4 }}>
-                                PRIMÆR: <span style={{ color:"#b8e840", fontWeight:600 }}>{m.primaryMuscle}</span>
+                                PRIMARY: <span style={{ color:"#b8e840", fontWeight:600 }}>{m.primaryMuscle}</span>
                               </div>
                             )}
                             {m.secondaryMuscles && (
                               <div style={{ fontSize:10, color:"#888", letterSpacing:"0.1em" }}>
-                                SEKUNDÆR: <span style={{ color:"#6a8a30" }}>{m.secondaryMuscles}</span>
+                                SECONDARY: <span style={{ color:"#6a8a30" }}>{m.secondaryMuscles}</span>
                               </div>
                             )}
                           </div>
@@ -1181,7 +1217,7 @@ export default function App() {
                       })()}
                       {/* Rep range dropdown */}
                       <div style={{ marginBottom:10 }}>
-                        <label style={S.label}>Rep Range</label>
+                        <label style={S.label}>REP RANGE</label>
                         <select style={S.select}>
                           {REP_RANGES.map(r => <option key={r}>{r}</option>)}
                         </select>
@@ -1208,10 +1244,10 @@ export default function App() {
                       <div style={{ display:"flex", gap:8 }}>
                         <button style={{...S.btn, flex:1, fontSize:10}}
                           onClick={() => { setEntry(p => ({...p, exercise: ex})); setView("log"); setExpandedEx(null); }}>
-                          Log sæt →
+                          Log set →
                         </button>
                         <button style={{...S.btnGhost, fontSize:10}}
-                          onClick={() => { setStatsEx(ex); setView("stats"); setExpandedEx(null); }}>
+                          onClick={() => { setStatsEx(ex); setView("insights"); setExpandedEx(null); }}>
                           Se progression →
                         </button>
                       </div>
@@ -1227,30 +1263,30 @@ export default function App() {
       {view === "equipment" && (
         <div style={S.page}>
           <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-            <input style={{...S.input, flex:1}} placeholder="Søg redskab..." value={eqSearch}
+            <input style={{...S.input, flex:1}} placeholder="Search equipment..." value={eqSearch}
               onChange={e => setEqSearch(e.target.value)} />
             <button style={S.btnGhost} onClick={() => setShowAddEq(!showAddEq)}>+</button>
           </div>
           {showAddEq && (
             <div style={{...S.card, marginBottom:10}}>
-              <label style={S.label}>Nyt redskab</label>
+              <label style={S.label}>NEW EQUIPMENT</label>
               <input style={{...S.input, marginBottom:10}} value={newEqName}
-                onChange={e => setNewEqName(e.target.value)} placeholder="Navn (fx Lat Pulldown Machine)..." />
+                onChange={e => setNewEqName(e.target.value)} placeholder="Name (e.g. Lat Pulldown Machine)..." />
               <div style={{ display:"flex", gap:8 }}>
                 <button
                   style={{...S.btn, flex:1, opacity: savingEq ? 0.6 : 1}}
                   onClick={handleAddEquipment}
                   disabled={savingEq || !newEqName.trim()}
                 >
-                  {savingEq ? "GEMMER..." : "TILFØJ TIL SHEETS"}
+                  {savingEq ? "SAVING..." : "SAVE"}
                 </button>
                 <button
                   style={S.btnGhost}
                   onClick={() => { setShowAddEq(false); setNewEqName(""); }}
-                >Annuller</button>
+                >Cancel</button>
               </div>
               <div style={{ fontSize:9, color:"#444", marginTop:8, letterSpacing:"0.05em" }}>
-                Gemmes i Redskaber-arket. Nye redskaber vises i alle dropdowns.
+                Saved to the Equipment sheet. New equipment appears in all dropdowns.
               </div>
             </div>
           )}
@@ -1266,7 +1302,7 @@ export default function App() {
                     onClick={() => setExpandedEq(key ? null : eq)}>
                     <div>
                       <div style={{ fontSize:13 }}>{eq}</div>
-                      {totalSets > 0 && <div style={{ fontSize:10, color:"#444", marginTop:2 }}>{totalSets} sæt · {exercises.length} øvelser</div>}
+                      {totalSets > 0 && <div style={{ fontSize:10, color:"#444", marginTop:2 }}>{totalSets} sets · {exercises.length} exercises</div>}
                     </div>
                     <span style={{ color:"#333", fontSize:12 }}>{key ? "▲" : "▼"}</span>
                   </div>
@@ -1291,7 +1327,7 @@ export default function App() {
                       )}
                       <button style={{...S.btn, width:"100%", fontSize:10}}
                         onClick={() => { setEntry(p => ({...p, equipment: eq})); setView("log"); setExpandedEq(null); }}>
-                        Log sæt med {eq} →
+                        Log set with {eq} →
                       </button>
                     </div>
                   )}
@@ -1301,21 +1337,74 @@ export default function App() {
         </div>
       )}
 
+      {/* ── GYMS ── */}
+      {view === "gyms" && (
+        <div style={S.page}>
+          <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+            <input style={{...S.input, flex:1}} placeholder="Search gym..." value={gymSearch}
+              onChange={e => setGymSearch(e.target.value)} />
+            <button style={S.btnGhost} onClick={() => setShowAddGym(!showAddGym)}>+</button>
+          </div>
+          {showAddGym && (
+            <div style={{...S.card, marginBottom:10}}>
+              <label style={S.label}>NEW GYM</label>
+              <input style={{...S.input, marginBottom:10}} value={newGymName}
+                onChange={e => setNewGymName(e.target.value)} placeholder="Name (e.g. SATS NØRREBRO)..." />
+              <div style={{ display:"flex", gap:8 }}>
+                <button
+                  style={{...S.btn, flex:1, opacity: savingGym ? 0.6 : 1}}
+                  onClick={handleAddGym}
+                  disabled={savingGym || !newGymName.trim()}
+                >
+                  {savingGym ? "SAVING..." : "SAVE"}
+                </button>
+                <button
+                  style={S.btnGhost}
+                  onClick={() => { setShowAddGym(false); setNewGymName(""); }}
+                >Cancel</button>
+              </div>
+              <div style={{ fontSize:9, color:"#444", marginTop:8, letterSpacing:"0.05em" }}>
+                Gemmes i Centre-arket. Nye gyms vises i dropdown'en når du logger.
+              </div>
+            </div>
+          )}
+          {sheetCenters
+            .filter(c => !gymSearch || c.name.toLowerCase().includes(gymSearch.toLowerCase()))
+            .map(c => {
+              const setsHere = allRecords.filter(r => r.center === c.name).length;
+              const exercisesHere = [...new Set(allRecords.filter(r => r.center === c.name).map(r => r.exercise).filter(Boolean))];
+              return (
+                <div key={c.name} style={S.card}>
+                  <div style={{ fontSize:13, color:"#e4e4dc", fontWeight:600 }}>{c.name}</div>
+                  <div style={{ fontSize:10, color:"#555", marginTop:4 }}>
+                    {setsHere} sets · {exercisesHere.length} different exercises
+                  </div>
+                </div>
+              );
+            })}
+          {!sheetCenters.length && (
+            <div style={{ color:"#444", fontSize:12, textAlign:"center", marginTop:40 }}>
+              No gyms yet. Add one with the + button above.
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── HISTORIK (grupperet pr. dag) ── */}
       {view === "history" && (
         <div style={S.page}>
           <div style={{...S.grid2, marginBottom:8}}>
             <select style={S.select} value={histEx} onChange={e => setHistEx(e.target.value)}>
-              <option value="">Alle øvelser</option>
+              <option value="">All exercises</option>
               {allExercises.map(ex => <option key={ex}>{ex}</option>)}
             </select>
             <select style={S.select} value={histEq} onChange={e => setHistEq(e.target.value)}>
-              <option value="">Alle redskaber</option>
+              <option value="">All equipment</option>
               {allEquipment.map(eq => <option key={eq}>{eq}</option>)}
             </select>
           </div>
           <select style={{...S.select, marginBottom:12, width:"100%"}} value={histCenter} onChange={e => setHistCenter(e.target.value)}>
-            <option value="">Alle centre</option>
+            <option value="">All gyms</option>
             {sheetCenters.map(c => <option key={c.name}>{c.name}</option>)}
           </select>
           {(() => {
@@ -1335,7 +1424,7 @@ export default function App() {
             if (!filteredDays.length) {
               return (
                 <div style={{ color:"#444", fontSize:12, textAlign:"center", marginTop:40 }}>
-                  Ingen sæt matcher filteret
+                  No sets match filter
                 </div>
               );
             }
@@ -1359,7 +1448,7 @@ export default function App() {
                             : centersForDay.length > 1 ? `${centersForDay.length} centre` : "";
                           return (
                             <>
-                              {day.records.length} sæt · {exercisesForDay.slice(0, 3).join(", ")}{exercisesForDay.length > 3 ? "…" : ""}
+                              {day.records.length} sets · {exercisesForDay.slice(0, 3).join(", ")}{exercisesForDay.length > 3 ? "…" : ""}
                               {centerLabel && <span style={{ color:"#4a6a00", marginLeft:4 }}> · {centerLabel}</span>}
                             </>
                           );
@@ -1415,12 +1504,12 @@ export default function App() {
       )}
 
       {/* ── STATS ── */}
-      {view === "stats" && (
+      {view === "insights" && (
         <div style={S.page}>
           <div style={{ marginBottom:12 }}>
-            <label style={S.label}>Øvelse</label>
+            <label style={S.label}>EXERCISE</label>
             <select style={S.select} value={statsEx} onChange={e => setStatsEx(e.target.value)}>
-              <option value="">— vælg øvelse —</option>
+              <option value="">— CHOOSE EXERCISE —</option>
               {allExercises.map(ex => <option key={ex}>{ex}</option>)}
             </select>
           </div>
@@ -1441,7 +1530,7 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
 
   if (!records.length) return (
     <div style={{ color:"#444", fontSize:12, textAlign:"center", marginTop:40 }}>
-      Ingen data for {exercise}
+      No data for {exercise}
     </div>
   );
 
@@ -1463,8 +1552,8 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
             <div style={{ fontSize:11, color:"#b8e840", letterSpacing:"0.1em", marginBottom:8 }}>{eq}</div>
             {best && (
               <div style={{ background:"#0c1800", border:"1px solid #1a2e00", borderRadius:8, padding:"10px 12px", marginBottom:10 }}>
-                <div style={{ fontSize:9, color:"#4a6a00", letterSpacing:"0.12em", marginBottom:6 }}>BEDSTE 1RM: {best} kg</div>
-                {[[40,"Opvarm"],[60,"Let"],[80,"Arbejds"]].map(([pct, label]) => (
+                <div style={{ fontSize:9, color:"#4a6a00", letterSpacing:"0.12em", marginBottom:6 }}>BEST 1RM: {best} kg</div>
+                {[[40,"Warm-up"],[60,"Light"],[80,"Working"]].map(([pct, label]) => (
                   <div key={pct} style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
                     <span style={{ fontSize:10, color:"#555" }}>{pct}% — {label}</span>
                     <span style={{ fontSize:11, color:"#b8e840", fontWeight:600 }}>{Math.round(best * pct / 100 * 2) / 2} kg</span>
@@ -1474,7 +1563,7 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
             )}
             {/* Simpel progressionskurve */}
             <ProgressChart records={recs} />
-            {/* Seneste sæt */}
+            {/* Latest sets */}
             <div style={{ marginTop:8 }}>
               {[...recs].reverse().slice(0, 5).map((r, i) => (
                 <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #161618" }}>
