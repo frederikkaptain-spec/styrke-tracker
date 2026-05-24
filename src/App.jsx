@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxCPqkI5Bu9_20FdZ6TIC4viM7d5ylE69t0PLEJefK4s_udLBO39vWr6C24RkqtaJGW/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw1OIDma9TfH7bM9kBfz_3oE1TCwOjbmH9eMLXGTNg04p8WZrxHYq05QIBub5Qvtye2/execL";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
@@ -44,6 +44,7 @@ function parseCSV(text) {
 }
 
 // CSV-fallback til at læse sæt (bruges kun hvis Apps Script ikke er sat op)
+// Bemærk: CSV-fallback understøtter ikke Center-kolonnen — brug Apps Script for det.
 async function fetchSetsFromCSV() {
   const res = await fetch(SHEET_CSV_URL, { cache: "no-store" });
   if (!res.ok) throw new Error(`Sheets CSV HTTP ${res.status}`);
@@ -55,32 +56,36 @@ async function fetchSetsFromCSV() {
     /^(dato|øvelse|oevelse|exercise|redskab|equipment|kg|reps)/i.test((c || "").trim())
   );
   const dataRows = looksLikeHeader ? rows.slice(1) : rows;
+  // Detektér om Center-kolonnen er til stede (kolonne 3 før Kg)
+  const hasCenter = looksLikeHeader && first[3] && /center/i.test(first[3]);
   return dataRows
     .filter(r => r.length >= 2 && (r[0] || "").trim())
     .map(r => {
-      const kg = parseFloat((r[3] || "").replace(",", "."));
-      const reps = parseInt(r[4]);
+      const offset = hasCenter ? 1 : 0;
+      const kg = parseFloat((r[3 + offset] || "").replace(",", "."));
+      const reps = parseInt(r[4 + offset]);
       return {
         date: (r[0] || "").trim(),
         exercise: (r[1] || "").trim(),
         equipment: (r[2] || "").trim(),
+        center: hasCenter ? (r[3] || "").trim() : "",
         kg: Number.isFinite(kg) ? kg : null,
         reps: Number.isFinite(reps) ? reps : null,
-        repsGoal: (r[5] || "").trim(),
-        setType: (r[6] || "").trim() || "Working",
-        oneRepMax: parseFloat((r[7] || "").replace(",", ".")) || null,
-        notes: (r[8] || "").trim(),
+        repsGoal: (r[5 + offset] || "").trim(),
+        setType: (r[6 + offset] || "").trim() || "Almindeligt sæt",
+        oneRepMax: parseFloat((r[7 + offset] || "").replace(",", ".")) || null,
+        notes: (r[8 + offset] || "").trim(),
       };
     })
     .filter(r => r.exercise);
 }
 
-// Hent alt data fra Apps Script (sæt, øvelser, redskaber)
+// Hent alt data fra Apps Script (sæt, øvelser, redskaber, centre)
 async function fetchAllData() {
   if (!isAppsScriptConfigured()) {
     // Fallback: hent kun sæt via CSV, returner tomme lister for resten
     const sets = await fetchSetsFromCSV();
-    return { sets, exercises: [], equipment: [] };
+    return { sets, exercises: [], equipment: [], centers: [] };
   }
   const res = await fetch(APPS_SCRIPT_URL, { cache: "no-store" });
   if (!res.ok) throw new Error(`Apps Script HTTP ${res.status}`);
@@ -90,6 +95,7 @@ async function fetchAllData() {
     sets: Array.isArray(json.sets) ? json.sets : [],
     exercises: Array.isArray(json.exercises) ? json.exercises : [],
     equipment: Array.isArray(json.equipment) ? json.equipment : [],
+    centers: Array.isArray(json.centers) ? json.centers : [],
   };
 }
 
@@ -120,10 +126,12 @@ async function logSetToSheet(set) {
     dato: set.date,
     oevelse: set.exercise,
     redskab: set.equipment,
+    handle: set.handle || "",
+    center: set.center || "",
     kg: String(set.kg),
     reps: String(set.reps),
     repsmaal: set.repsGoal || "",
-    saettype: set.setType || "Working",
+    saettype: set.setType || "Almindeligt sæt",
     orm: set.oneRepMax != null ? String(set.oneRepMax) : "",
     noter: set.notes || "",
   });
@@ -135,6 +143,7 @@ async function saveExerciseToSheet(exercise) {
     name: exercise.name,
     primaryMuscle: exercise.primaryMuscle || "",
     secondaryMuscles: exercise.secondaryMuscles || "",
+    equipment: exercise.equipment || "",
   });
 }
 
@@ -142,6 +151,13 @@ async function saveEquipmentToSheet(equipment) {
   return postToAppsScript({
     type: "equipment",
     name: equipment.name,
+  });
+}
+
+async function saveCenterToSheet(center) {
+  return postToAppsScript({
+    type: "center",
+    name: center.name,
   });
 }
 
@@ -157,58 +173,21 @@ function normalizeKg(kg, equipment) {
   return equipment.toLowerCase().includes("dumbbell") ? kg * 2 : kg;
 }
 
-// ─── HISTORISK DATA (kompakt) ─────────────────────────────────────────────────
-// Format: [dato, øvelse, kg, reps, repsGoal, equipment, notes]
-const SEED_DATA = [
-  ["2026-05-20","Bænkpres","80","5","5","Barbell",""],
-  ["2026-05-20","Bænkpres","85","3","3","Barbell","PR"],
-  ["2026-05-20","Squat","100","5","5","Barbell",""],
-  ["2026-05-20","Squat","110","3","3","Barbell",""],
-  ["2026-05-18","Lat Pulldown","70","10","10","Machine (New)",""],
-  ["2026-05-18","Lat Pulldown","75","8","8","Machine (New)",""],
-  ["2026-05-18","Chest Press","60","10","8-10","Machine (New)",""],
-  ["2026-05-15","Dødløft","120","5","5","Barbell",""],
-  ["2026-05-15","Dødløft","130","3","3","Barbell","PR"],
-  ["2026-05-15","Bent Over Row","70","8","8-10","Barbell",""],
-  ["2026-05-13","Skulderpress","50","8","8-10","Dumbbell",""],
-  ["2026-05-13","Lateral Raise","15","12","12-15","Dumbbell",""],
-  ["2026-05-13","Bicep Curl","25","10","10-12","Dumbbell",""],
-  ["2026-05-10","Bænkpres","75","8","8","Barbell",""],
-  ["2026-05-10","Bænkpres","80","5","5","Barbell",""],
-  ["2026-05-10","Incline Press","55","10","8-10","Dumbbell",""],
-  ["2026-05-08","Squat","95","6","6","Barbell",""],
-  ["2026-05-08","Leg Press","140","12","10-12","Machine (New)",""],
-  ["2026-05-08","Leg Curl","50","12","10-12","Machine (New)",""],
-  ["2026-05-06","Wide Grip Pulldown","65","10","10","Machine (Old)",""],
-  ["2026-05-06","Wide Grip Pulldown","70","8","8-10","Machine (Old)",""],
-  ["2026-05-06","Seated Row","60","10","10","Cable",""],
-  ["2026-05-03","Bænkpres","77.5","6","6","Barbell",""],
-  ["2026-05-01","Dødløft","125","4","4-5","Barbell",""],
-  ["2026-04-28","Lat Pulldown","72.5","8","8-10","Machine (New)",""],
-  ["2026-04-26","Squat","105","4","4-5","Barbell",""],
-  ["2026-04-24","Skulderpress","52.5","8","8","Dumbbell",""],
-  ["2026-04-22","Bænkpres","82.5","3","3","Barbell","PR"],
-  ["2026-04-20","Leg Press","150","10","10","Machine (New)",""],
-  ["2026-04-18","Dødløft","132.5","2","2-3","Barbell","PR"],
-];
+// ─── HISTORISK DATA ───────────────────────────────────────────────────────────
+// Sheet er nu eneste kilde for både øvelser, redskaber og træningsdata.
+const SEED_DATA = [];
 
-const ALL_EXERCISES = [
-  "Bænkpres","Squat","Dødløft","Overhead Press","Bent Over Row",
-  "Lat Pulldown","Wide Grip Pulldown","Seated Row","Chest Press",
-  "Leg Press","Leg Curl","Leg Extension","Skulderpress","Lateral Raise",
-  "Front Raise","Bicep Curl","Hammer Curl","Tricep Pushdown",
-  "Incline Press","Cable Fly","Face Pull","Shrugs","Hip Thrust",
-  "Romanian Deadlift","Bulgarian Split Squat","Assisted Pull-Up","Assisted Dips",
-  "Back Extension","Calf Raise","Preacher Curl",
-];
+// Sheet er nu eneste sandhed for øvelser og redskaber.
+// Hvis sheet ikke kan læses, viser appen ingen øvelser/redskaber til at vælge —
+// brugeren skal i så fald tjekke sin Apps Script-opsætning.
+const ALL_EXERCISES = [];
+const ALL_EQUIPMENT = [];
 
-const ALL_EQUIPMENT = [
-  "Barbell","Dumbbell","Machine (New)","Machine (Old)","Cable",
-  "Kettlebell","Smith Machine","Bodyweight","Resistance Band",
-];
+// Handles til CABLE TOWER. Bruges som ekstra valg når redskab = CABLE TOWER.
+const HANDLES = ["ROPE", "BAR", "HANDLE"];
 
-const SET_TYPES = ["Working","Warm-up","Drop Set","AMRAP","Failure"];
-const REP_RANGES = ["1-3","3-5","4-5","5","5-8","6-8","8-10","8-12","10-12","10-15","12-15","15-20","20-30"];
+const SET_TYPES = ["Almindeligt sæt","Warm-up","Drop Set","AMRAP","Failure","Working"];
+const REP_RANGES = ["1-3","3-5","4-5","5","5-8","6-8","8-10","8-12","10-12","10-15","12-15","15-20","20-30","30-60 sek."];
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const S = {
@@ -312,19 +291,21 @@ export default function App() {
 
   // ── Google Sheets data ──
   const [sheetData, setSheetData] = useState([]);
-  const [sheetExercises, setSheetExercises] = useState([]); // [{name, primaryMuscle, secondaryMuscles}]
+  const [sheetExercises, setSheetExercises] = useState([]); // [{name, primaryMuscle, secondaryMuscles, equipment}]
   const [sheetEquipment, setSheetEquipment] = useState([]); // [{name}]
+  const [sheetCenters, setSheetCenters] = useState([]); // [{name}]
   const [sheetLoading, setSheetLoading] = useState(true);
   const [sheetError, setSheetError] = useState(null);
 
   // LOG state — multi-sæt session builder
   const today = new Date().toISOString().slice(0, 10);
   const [sessionDate, setSessionDate] = useState(today);
+  const [sessionCenter, setSessionCenter] = useState(""); // valgfri — kan være tom
   const newSetId = () => `s_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const blankEntry = () => ({
     id: newSetId(),
-    exercise: "", equipment: "", kg: "", reps: "",
-    repsGoal: "8-10", setType: "Working", notes: "",
+    exercise: "", equipment: "", handle: "", kg: "", reps: "",
+    repsGoal: "8-10", setType: "Almindeligt sæt", notes: "",
     collapsed: false,
   });
   const [entries, setEntries] = useState([blankEntry()]);
@@ -359,6 +340,7 @@ export default function App() {
   const [newExName, setNewExName] = useState("");
   const [newExPrimary, setNewExPrimary] = useState("");
   const [newExSecondary, setNewExSecondary] = useState("");
+  const [newExEquipment, setNewExEquipment] = useState("");
   const [savingEx, setSavingEx] = useState(false);
 
   // REDSKABER state
@@ -371,6 +353,7 @@ export default function App() {
   // HISTORIK state
   const [histEx, setHistEx] = useState("");
   const [histEq, setHistEq] = useState("");
+  const [histCenter, setHistCenter] = useState("");
   const [expandedDay, setExpandedDay] = useState(null);
 
   // STATS state
@@ -385,8 +368,8 @@ export default function App() {
   })), []);
 
   const allRecords = useMemo(() => {
-    // Dedup-key: dato + øvelse + redskab + kg + reps. Sheet vinder over seed.
-    const keyOf = r => `${r.date}|${r.exercise}|${r.equipment}|${r.kg}|${r.reps}`;
+    // Dedup-key: dato + øvelse + redskab + center + kg + reps. Sheet vinder over seed.
+    const keyOf = r => `${r.date}|${r.exercise}|${r.equipment}|${r.center||""}|${r.kg}|${r.reps}`;
     const sheetKeys = new Set(sheetData.map(keyOf));
     const seedNotInSheet = allData.filter(r => !sheetKeys.has(keyOf(r)));
     return [...seedNotInSheet, ...sheetData, ...localData]
@@ -398,11 +381,12 @@ export default function App() {
     let cancelled = false;
     setSheetLoading(true);
     fetchAllData()
-      .then(({ sets, exercises, equipment }) => {
+      .then(({ sets, exercises, equipment, centers }) => {
         if (cancelled) return;
         setSheetData(sets);
         setSheetExercises(exercises);
         setSheetEquipment(equipment);
+        setSheetCenters(centers || []);
         setSheetError(null);
       })
       .catch(err => {
@@ -418,10 +402,11 @@ export default function App() {
   const refreshSheet = useCallback(async () => {
     setSheetLoading(true);
     try {
-      const { sets, exercises, equipment } = await fetchAllData();
+      const { sets, exercises, equipment, centers } = await fetchAllData();
       setSheetData(sets);
       setSheetExercises(exercises);
       setSheetEquipment(equipment);
+      setSheetCenters(centers || []);
       setSheetError(null);
       showToast(`Hentet ${sets.length} sæt fra Sheets ✓`, true);
     } catch (err) {
@@ -442,6 +427,7 @@ export default function App() {
       name,
       primaryMuscle: newExPrimary.trim(),
       secondaryMuscles: newExSecondary.trim(),
+      equipment: newExEquipment.trim(),
     });
     if (ok) {
       // Opdater lokalt så det vises straks
@@ -451,20 +437,21 @@ export default function App() {
           name,
           primaryMuscle: newExPrimary.trim(),
           secondaryMuscles: newExSecondary.trim(),
+          equipment: newExEquipment.trim(),
         }];
       });
-      setNewExName(""); setNewExPrimary(""); setNewExSecondary("");
+      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment("");
       setShowAddEx(false);
       showToast(`"${name}" tilføjet ✓`, true);
     } else {
       // Fallback: gem lokalt så brugeren ikke mister det
       setCustomExercises(p => [...p, name]);
-      setNewExName(""); setNewExPrimary(""); setNewExSecondary("");
+      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment("");
       setShowAddEx(false);
       showToast("Kunne ikke gemme i Sheets — kun lokalt", false);
     }
     setSavingEx(false);
-  }, [newExName, newExPrimary, newExSecondary]);
+  }, [newExName, newExPrimary, newExSecondary, newExEquipment]);
 
   // ── Tilføj nyt redskab (gemmes i Sheets) ──
   const handleAddEquipment = useCallback(async () => {
@@ -489,15 +476,36 @@ export default function App() {
   }, [newEqName]);
 
   // ── best1RM map ──
+  // Nøgle: exercise|equipment|handle|center — så samme øvelse på forskellig handle/center
+  // har sit eget 1RM-track (fx Bicep Curl med Rope ≠ Bicep Curl med Bar).
   const best1RMMap = useMemo(() => {
     const map = {};
     for (const r of allRecords) {
       if (!r.exercise || !r.equipment || !r.oneRepMax) continue;
-      const key = `${r.exercise}||${r.equipment}`;
+      const key = `${r.exercise}||${r.equipment}||${r.handle||""}||${r.center||""}`;
       if (!map[key] || r.oneRepMax > map[key]) map[key] = r.oneRepMax;
     }
     return map;
   }, [allRecords]);
+
+  // Helper: hent bedste 1RM. Hvis handle/center er specificeret, vises kun det
+  // matching slice. Hvis ikke, returneres bedste på tværs af alle varianter.
+  const getBest1RM = useCallback((exercise, equipment, handle, center) => {
+    if (!exercise || !equipment) return null;
+    if (handle != null && center != null) {
+      return best1RMMap[`${exercise}||${equipment}||${handle||""}||${center||""}`] || null;
+    }
+    // Aggregat: max på tværs af alle handle/center varianter
+    const prefix = `${exercise}||${equipment}||`;
+    let best = null;
+    for (const key in best1RMMap) {
+      if (key.startsWith(prefix)) {
+        const v = best1RMMap[key];
+        if (best == null || v > best) best = v;
+      }
+    }
+    return best;
+  }, [best1RMMap]);
 
   // ── Grupperet pr. dag (til Historik + Import) ──
   const daysGrouped = useMemo(() => {
@@ -531,25 +539,38 @@ export default function App() {
     return [...new Set([...ALL_EQUIPMENT, ...fromSheet, ...fromData])].sort();
   }, [allRecords, sheetEquipment]);
 
-  // Map øvelsesnavn → muskelgruppe-info (fra Øvelser-arket)
+  // Map øvelsesnavn → muskelgruppe-info og redskaber (fra Øvelser-arket)
   const exerciseMuscleMap = useMemo(() => {
     const map = {};
     for (const e of sheetExercises) {
       if (e.name) map[e.name] = {
         primaryMuscle: e.primaryMuscle || "",
         secondaryMuscles: e.secondaryMuscles || "",
+        equipment: e.equipment || "",
       };
     }
     return map;
   }, [sheetExercises]);
 
-  const equipForExercise = useMemo(() => {
-    if (!entry.exercise) return allEquipment;
+  // Helper: hvilke redskaber kan en given øvelse laves med?
+  // Prioritet: 1) Øvelser-arkets Redskab-kolonne, 2) hvad brugeren faktisk har brugt før, 3) alle redskaber
+  const getEquipForExercise = useCallback((exerciseName) => {
+    if (!exerciseName) return allEquipment;
+    const meta = exerciseMuscleMap[exerciseName];
+    if (meta && meta.equipment) {
+      // Komma-separeret liste, fx "BARBELL, DUMBBELLS, MACHINE"
+      return meta.equipment.split(",").map(s => s.trim()).filter(Boolean);
+    }
     const used = [...new Set(allRecords
-      .filter(r => r.exercise === entry.exercise)
+      .filter(r => r.exercise === exerciseName)
       .map(r => r.equipment).filter(Boolean))];
     return used.length ? used : allEquipment;
-  }, [entry.exercise, allRecords, allEquipment]);
+  }, [allEquipment, allRecords, exerciseMuscleMap]);
+
+  const equipForExercise = useMemo(
+    () => getEquipForExercise(entry.exercise),
+    [entry.exercise, getEquipForExercise]
+  );
 
   // ── Live 1RM estimate ──
   const liveOrm = useMemo(() => {
@@ -560,8 +581,8 @@ export default function App() {
 
   const bestOrmForEntry = useMemo(() => {
     if (!entry.exercise || !entry.equipment) return null;
-    return best1RMMap[`${entry.exercise}||${entry.equipment}`] || null;
-  }, [entry.exercise, entry.equipment, best1RMMap]);
+    return getBest1RM(entry.exercise, entry.equipment, entry.handle, sessionCenter);
+  }, [entry.exercise, entry.equipment, entry.handle, sessionCenter, getBest1RM]);
 
   // ── Show toast ──
   function showToast(msg, ok = true) {
@@ -582,6 +603,8 @@ export default function App() {
     setSaving(true);
     const records = entries.map(e => ({
       date: sessionDate, exercise: e.exercise, equipment: e.equipment,
+      handle: e.handle || "",
+      center: sessionCenter,
       kg: parseFloat(e.kg), reps: parseInt(e.reps),
       repsGoal: e.repsGoal, setType: e.setType, notes: e.notes,
       oneRepMax: calc1RM(parseFloat(e.kg), parseInt(e.reps)),
@@ -590,12 +613,13 @@ export default function App() {
     const results = await Promise.all(records.map(r => logSetToSheet(r)));
     const allOk = results.every(Boolean);
     setLocalData(prev => [...prev, ...records]);
-    // Nulstil til ét tomt sæt — men husk øvelse/redskab/rep range/sæt type fra sidste sæt
+    // Nulstil til ét tomt sæt — men husk øvelse/redskab/handle/rep range/sæt type fra sidste sæt
     const last = entries[entries.length - 1];
     setEntries([{
       ...blankEntry(),
       exercise: last.exercise,
       equipment: last.equipment,
+      handle: last.handle || "",
       repsGoal: last.repsGoal,
       setType: last.setType,
     }]);
@@ -606,7 +630,7 @@ export default function App() {
         : "Kunne ikke gemme i Sheets — gemt lokalt",
       allOk
     );
-  }, [entries, sessionDate]);
+  }, [entries, sessionDate, sessionCenter]);
 
   // ── Tilføj nyt sæt (arver smart defaults fra det forrige) ──
   const addSet = useCallback(() => {
@@ -620,8 +644,9 @@ export default function App() {
         ...blankEntry(),
         exercise: last?.exercise || "",
         equipment: last?.equipment || "",
+        handle: last?.handle || "",
         repsGoal: last?.repsGoal || "8-10",
-        setType: last?.setType || "Working",
+        setType: last?.setType || "Almindeligt sæt",
       }];
     });
   }, []);
@@ -653,13 +678,20 @@ export default function App() {
       id: `s_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       exercise: r.exercise || "",
       equipment: r.equipment || "",
+      handle: r.handle || "",
       kg: r.kg != null ? String(r.kg) : "",
       reps: r.reps != null ? String(r.reps) : "",
       repsGoal: r.repsGoal || "8-10",
-      setType: r.setType || "Working",
+      setType: r.setType || "Almindeligt sæt",
       notes: r.notes || "",
-      collapsed: true, // alle kollapsede så man har overblik
+      collapsed: true,
     }));
+
+    // Hvis alle sæt fra dagen har samme center, sæt sessionCenter automatisk
+    const centersInDay = [...new Set(day.records.map(r => r.center).filter(Boolean))];
+    if (centersInDay.length === 1) {
+      setSessionCenter(centersInDay[0]);
+    }
 
     setEntries(prev => {
       // Hvis nuværende state kun er ét tomt sæt → erstat
@@ -715,15 +747,30 @@ export default function App() {
       {/* ── LOG (multi-sæt session builder) ── */}
       {view === "log" && (
         <div style={S.page}>
-          {/* Session-dato — gælder alle sæt */}
+          {/* Session: dato + center — gælder alle sæt */}
           <div style={{...S.card, padding:"10px 14px", marginBottom:10}}>
-            <label style={S.label}>Dato for session</label>
-            <input
-              type="date"
-              style={S.input}
-              value={sessionDate}
-              onChange={e => setSessionDate(e.target.value)}
-            />
+            <div style={{...S.grid2}}>
+              <div>
+                <label style={S.label}>Dato</label>
+                <input
+                  type="date"
+                  style={S.input}
+                  value={sessionDate}
+                  onChange={e => setSessionDate(e.target.value)}
+                />
+              </div>
+              <div>
+                <label style={S.label}>Center</label>
+                <select
+                  style={S.select}
+                  value={sessionCenter}
+                  onChange={e => setSessionCenter(e.target.value)}
+                >
+                  <option value="">— vælg center —</option>
+                  {sheetCenters.map(c => <option key={c.name}>{c.name}</option>)}
+                </select>
+              </div>
+            </div>
           </div>
 
           {/* Importér tidligere træning */}
@@ -790,16 +837,8 @@ export default function App() {
 
           {entries.map((e, idx) => {
             const eLiveOrm = calc1RM(parseFloat(e.kg), parseInt(e.reps));
-            const eBestOrm = (e.exercise && e.equipment)
-              ? best1RMMap[`${e.exercise}||${e.equipment}`] || null
-              : null;
-            const eEquipForExercise = (() => {
-              if (!e.exercise) return allEquipment;
-              const used = [...new Set(allRecords
-                .filter(r => r.exercise === e.exercise)
-                .map(r => r.equipment).filter(Boolean))];
-              return used.length ? used : allEquipment;
-            })();
+            const eBestOrm = getBest1RM(e.exercise, e.equipment, e.handle, sessionCenter);
+            const eEquipForExercise = getEquipForExercise(e.exercise);
             const isComplete = e.exercise && e.kg && e.reps;
 
             return (
@@ -873,7 +912,7 @@ export default function App() {
                     <div style={{ marginBottom:10 }}>
                       <label style={S.label}>Øvelse</label>
                       <select style={S.select} value={e.exercise}
-                        onChange={ev => updateEntry(e.id, { exercise: ev.target.value, equipment: "" })}>
+                        onChange={ev => updateEntry(e.id, { exercise: ev.target.value, equipment: "", handle: "" })}>
                         <option value="">— vælg øvelse —</option>
                         {allExercises.map(ex => <option key={ex}>{ex}</option>)}
                       </select>
@@ -882,11 +921,27 @@ export default function App() {
                     <div style={{ marginBottom:10 }}>
                       <label style={S.label}>Redskab</label>
                       <select style={S.select} value={e.equipment}
-                        onChange={ev => updateEntry(e.id, { equipment: ev.target.value })}>
+                        onChange={ev => updateEntry(e.id, {
+                          equipment: ev.target.value,
+                          // Nulstil handle hvis ikke CABLE TOWER
+                          handle: ev.target.value === "CABLE TOWER" ? e.handle : "",
+                        })}>
                         <option value="">— vælg redskab —</option>
                         {eEquipForExercise.map(eq => <option key={eq}>{eq}</option>)}
                       </select>
                     </div>
+
+                    {/* Handle-dropdown vises kun for CABLE TOWER */}
+                    {e.equipment === "CABLE TOWER" && (
+                      <div style={{ marginBottom:10 }}>
+                        <label style={S.label}>Handle</label>
+                        <select style={S.select} value={e.handle || ""}
+                          onChange={ev => updateEntry(e.id, { handle: ev.target.value })}>
+                          <option value="">— vælg handle —</option>
+                          {HANDLES.map(h => <option key={h}>{h}</option>)}
+                        </select>
+                      </div>
+                    )}
 
                     {/* 1RM guide */}
                     {eBestOrm && (
@@ -1020,13 +1075,16 @@ export default function App() {
             <div style={{...S.card, marginBottom:10}}>
               <label style={S.label}>Ny øvelse</label>
               <input style={{...S.input, marginBottom:8}} value={newExName}
-                onChange={e => setNewExName(e.target.value)} placeholder="Navn (fx Bænkpres)..." />
+                onChange={e => setNewExName(e.target.value)} placeholder="Navn (fx BENCH PRESS)..." />
               <label style={S.label}>Primær muskel</label>
               <input style={{...S.input, marginBottom:8}} value={newExPrimary}
-                onChange={e => setNewExPrimary(e.target.value)} placeholder="Fx Bryst" />
+                onChange={e => setNewExPrimary(e.target.value)} placeholder="Fx CHEST" />
               <label style={S.label}>Sekundær muskler</label>
-              <input style={{...S.input, marginBottom:10}} value={newExSecondary}
-                onChange={e => setNewExSecondary(e.target.value)} placeholder="Fx Triceps, Skulder (komma-separeret)" />
+              <input style={{...S.input, marginBottom:8}} value={newExSecondary}
+                onChange={e => setNewExSecondary(e.target.value)} placeholder="Fx TRICEPS, SHOULDERS (komma-separeret)" />
+              <label style={S.label}>Redskaber</label>
+              <input style={{...S.input, marginBottom:10}} value={newExEquipment}
+                onChange={e => setNewExEquipment(e.target.value)} placeholder="Fx BARBELL, DUMBBELLS (komma-separeret)" />
               <div style={{ display:"flex", gap:8 }}>
                 <button
                   style={{...S.btn, flex:1, opacity: savingEx ? 0.6 : 1}}
@@ -1037,11 +1095,11 @@ export default function App() {
                 </button>
                 <button
                   style={S.btnGhost}
-                  onClick={() => { setShowAddEx(false); setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); }}
+                  onClick={() => { setShowAddEx(false); setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); }}
                 >Annuller</button>
               </div>
               <div style={{ fontSize:9, color:"#444", marginTop:8, letterSpacing:"0.05em" }}>
-                Gemmes i Øvelser-arket. Sekundær muskler bruges senere til muskelgruppe-statistik.
+                Gemmes i Øvelser-arket. Redskaberne bestemmer hvilke valg du får når du logger denne øvelse.
               </div>
             </div>
           )}
@@ -1051,7 +1109,7 @@ export default function App() {
               const key = expandedEx === ex;
               const eqList = [...new Set(allRecords.filter(r => r.exercise === ex).map(r => r.equipment).filter(Boolean))];
               const bestOrm = eqList.reduce((best, eq) => {
-                const v = best1RMMap[`${ex}||${eq}`];
+                const v = getBest1RM(ex, eq);
                 return v && (!best || v > best) ? v : best;
               }, null);
               return (
@@ -1100,7 +1158,7 @@ export default function App() {
                         <div style={{ marginBottom:10 }}>
                           <div style={S.label}>Redskaber</div>
                           {eqList.map(eq => {
-                            const orm = best1RMMap[`${ex}||${eq}`];
+                            const orm = getBest1RM(ex, eq);
                             return (
                               <div key={eq} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"5px 0", borderBottom:"1px solid #161618" }}>
                                 <button style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#b8e840", fontSize:11, fontFamily:"'DM Mono', monospace", letterSpacing:"0.05em" }}
@@ -1185,7 +1243,7 @@ export default function App() {
                         <div style={{ marginBottom:10 }}>
                           <div style={S.label}>Øvelser du har lavet</div>
                           {exercises.map(ex => {
-                            const orm = best1RMMap[`${ex}||${eq}`];
+                            const orm = getBest1RM(ex, eq);
                             return (
                               <div key={ex} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px solid #161618" }}>
                                 <button style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#ccc", fontSize:11, fontFamily:"'DM Mono', monospace" }}
@@ -1213,7 +1271,7 @@ export default function App() {
       {/* ── HISTORIK (grupperet pr. dag) ── */}
       {view === "history" && (
         <div style={S.page}>
-          <div style={{...S.grid2, marginBottom:12}}>
+          <div style={{...S.grid2, marginBottom:8}}>
             <select style={S.select} value={histEx} onChange={e => setHistEx(e.target.value)}>
               <option value="">Alle øvelser</option>
               {allExercises.map(ex => <option key={ex}>{ex}</option>)}
@@ -1223,6 +1281,10 @@ export default function App() {
               {allEquipment.map(eq => <option key={eq}>{eq}</option>)}
             </select>
           </div>
+          <select style={{...S.select, marginBottom:12, width:"100%"}} value={histCenter} onChange={e => setHistCenter(e.target.value)}>
+            <option value="">Alle centre</option>
+            {sheetCenters.map(c => <option key={c.name}>{c.name}</option>)}
+          </select>
           {(() => {
             // Filtrér dage så de kun viser sæt der matcher filter (og skjul dage uden match)
             const filteredDays = daysGrouped
@@ -1230,7 +1292,8 @@ export default function App() {
                 ...d,
                 records: d.records.filter(r =>
                   (!histEx || r.exercise === histEx) &&
-                  (!histEq || r.equipment === histEq)
+                  (!histEq || r.equipment === histEq) &&
+                  (!histCenter || r.center === histCenter)
                 ),
               }))
               .filter(d => d.records.length > 0)
@@ -1257,7 +1320,17 @@ export default function App() {
                     <div style={{ minWidth:0, flex:1 }}>
                       <div style={{ fontSize:13, color:"#e4e4dc", fontWeight:600 }}>{day.date}</div>
                       <div style={{ fontSize:10, color:"#555", marginTop:2 }}>
-                        {day.records.length} sæt · {exercisesForDay.slice(0, 3).join(", ")}{exercisesForDay.length > 3 ? "…" : ""}
+                        {(() => {
+                          const centersForDay = [...new Set(day.records.map(r => r.center).filter(Boolean))];
+                          const centerLabel = centersForDay.length === 1 ? centersForDay[0]
+                            : centersForDay.length > 1 ? `${centersForDay.length} centre` : "";
+                          return (
+                            <>
+                              {day.records.length} sæt · {exercisesForDay.slice(0, 3).join(", ")}{exercisesForDay.length > 3 ? "…" : ""}
+                              {centerLabel && <span style={{ color:"#4a6a00", marginLeft:4 }}> · {centerLabel}</span>}
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
                     <span style={{ color:"#444", fontSize:12, flexShrink:0, marginLeft:8 }}>{isOpen ? "▲" : "▼"}</span>
@@ -1267,7 +1340,7 @@ export default function App() {
                   {isOpen && (
                     <div style={{ marginTop:10, borderTop:"1px solid #1a1a1e", paddingTop:8 }}>
                       {day.records.map((r, i) => {
-                        const isPR = r.oneRepMax && best1RMMap[`${r.exercise}||${r.equipment}`] === r.oneRepMax;
+                        const isPR = r.oneRepMax && getBest1RM(r.exercise, r.equipment, r.handle, r.center) === r.oneRepMax;
                         return (
                           <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #161618" }}>
                             <div style={{ minWidth:0, flex:1 }}>
@@ -1275,7 +1348,10 @@ export default function App() {
                                 {r.exercise}
                                 {isPR && <span style={{...S.tagGreen, marginLeft:6}}>PR</span>}
                               </div>
-                              <div style={{ fontSize:10, color:"#444", marginTop:1 }}>{r.equipment}</div>
+                              <div style={{ fontSize:10, color:"#444", marginTop:1 }}>
+                                {r.equipment}{r.handle ? ` · ${r.handle}` : ""}
+                                {r.center && <span style={{ color:"#4a6a00" }}> · {r.center}</span>}
+                              </div>
                             </div>
                             <div style={{ textAlign:"right", flexShrink:0 }}>
                               <div style={{ fontSize:13, color:"#b8e840", fontWeight:600 }}>{r.kg} kg × {r.reps}</div>
@@ -1340,7 +1416,15 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
     <div>
       {equipment.map(eq => {
         const recs = records.filter(r => r.equipment === eq).slice(0, 20).reverse();
-        const best = best1RMMap[`${exercise}||${eq}`];
+        // Aggregat: max på tværs af alle handle/center varianter for denne (exercise, equipment)
+        const prefix = `${exercise}||${eq}||`;
+        let best = null;
+        for (const key in best1RMMap) {
+          if (key.startsWith(prefix)) {
+            const v = best1RMMap[key];
+            if (best == null || v > best) best = v;
+          }
+        }
         return (
           <div key={eq} style={{ marginBottom:20 }}>
             <div style={{ fontSize:11, color:"#b8e840", letterSpacing:"0.1em", marginBottom:8 }}>{eq}</div>
