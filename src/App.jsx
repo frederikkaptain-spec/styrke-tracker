@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzMMMnRtBq2LsTeF0jZoB-8S1gbkKnQb8DRdUvJ8r7BIGucAC6IpxUF59BQ8ocfWGXh/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxo_D38xKCKSjbZFlegQtlFx-mGDT7X8elR4AQWXJpHFJIUgDKRU8hyVXPmWrP6uICh/exec";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
@@ -202,7 +202,7 @@ const ALL_EXERCISES = [];
 const ALL_EQUIPMENT = [];
 
 // Handles til CABLE TOWER. Bruges som ekstra valg når redskab = CABLE TOWER.
-const HANDLES = ["ROPE", "BAR", "HANDLE"];
+const HANDLES = ["ROPE", "BAR", "HANDLE", "WIDE GRIB HANDLE"];
 
 const SET_TYPES = ["Almindeligt sæt","Warm-up","Drop Set","AMRAP","Failure","Working"];
 const REP_RANGES = ["1-3","3-5","4-5","5","5-8","6-8","8-10","8-12","10-12","10-15","12-15","15-20","20-30","30-60 sek."];
