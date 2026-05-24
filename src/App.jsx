@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw1OIDma9TfH7bM9kBfz_3oE1TCwOjbmH9eMLXGTNg04p8WZrxHYq05QIBub5Qvtye2/execL";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzMMMnRtBq2LsTeF0jZoB-8S1gbkKnQb8DRdUvJ8r7BIGucAC6IpxUF59BQ8ocfWGXh/exec";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
@@ -87,10 +87,28 @@ async function fetchAllData() {
     const sets = await fetchSetsFromCSV();
     return { sets, exercises: [], equipment: [], centers: [] };
   }
-  const res = await fetch(APPS_SCRIPT_URL, { cache: "no-store" });
+  let res;
+  try {
+    res = await fetch(APPS_SCRIPT_URL, { cache: "no-store", redirect: "follow" });
+  } catch (e) {
+    throw new Error(`Netværksfejl: ${e.message || e}`);
+  }
   if (!res.ok) throw new Error(`Apps Script HTTP ${res.status}`);
-  const json = await res.json();
-  if (json.error) throw new Error(json.error);
+  const text = await res.text();
+  // Apps Script kan returnere HTML (login-side eller redirect) hvis deployment
+  // ikke er sat til "Anyone" eller hvis URL'en peger på en gammel version
+  if (text.trim().startsWith("<")) {
+    console.error("Apps Script returnerede HTML — tjekkes nedenfor:", text.slice(0, 500));
+    throw new Error("Apps Script returnerede HTML i stedet for JSON. Tjek at deployment access = 'Anyone' og at scriptet er redeployet med nyeste kode.");
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    console.error("JSON-parse fejl. Raw response:", text.slice(0, 500));
+    throw new Error(`Apps Script returnerede ugyldig JSON: ${text.slice(0, 100)}`);
+  }
+  if (json.error) throw new Error(`Apps Script fejl: ${json.error}`);
   return {
     sets: Array.isArray(json.sets) ? json.sets : [],
     exercises: Array.isArray(json.exercises) ? json.exercises : [],
@@ -743,6 +761,21 @@ export default function App() {
           ))}
         </div>
       </div>
+
+      {/* Fejl-banner — vises under header når data ikke kan hentes */}
+      {sheetError && (
+        <div style={{
+          background:"#2a0a0a", border:"1px solid #5a1a1a", borderRadius:6,
+          padding:"10px 12px", margin:"0 0 12px 0",
+          fontSize:11, color:"#ff9999", lineHeight:1.5,
+        }}>
+          <div style={{ fontWeight:600, marginBottom:4, color:"#ff6b6b" }}>Kunne ikke hente data fra Google Sheets</div>
+          <div style={{ fontSize:10, color:"#cc8888" }}>{sheetError}</div>
+          <div style={{ fontSize:9, color:"#774444", marginTop:6, letterSpacing:"0.05em" }}>
+            Tjek at Apps Script er deployed med "Anyone" access og at URL'en i App.jsx er korrekt.
+          </div>
+        </div>
+      )}
 
       {/* ── LOG (multi-sæt session builder) ── */}
       {view === "log" && (
