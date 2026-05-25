@@ -1,9 +1,9 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxkMHvckHdhm6oqO8JLESbCPGMjdcOxbxOStsSj9VYk6PBjsyLK_yq2Mrslcuigl7dd/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxInrjrpLPsiO-XkMP29amC9YkyHkcVS0mRBy2gEoDFhMIB9bvhebZ_B_ALgcd89A42/exec";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
@@ -84,7 +84,7 @@ async function fetchSetsFromCSV() {
 async function fetchAllData() {
   if (!isAppsScriptConfigured()) {
     const sets = await fetchSetsFromCSV();
-    return { sets, exercises: [], equipment: [], centers: [], handles: [], plans: [] };
+    return { sets, exercises: [], equipment: [], centers: [], handles: [], plans: [], videos: [] };
   }
   let res;
   try {
@@ -108,11 +108,13 @@ async function fetchAllData() {
   if (json.error) throw new Error(`Apps Script error: ${json.error}`);
   return {
     sets: Array.isArray(json.sets) ? json.sets : [],
+    best1RMMap: json.best1RMMap || {},
     exercises: Array.isArray(json.exercises) ? json.exercises : [],
     equipment: Array.isArray(json.equipment) ? json.equipment : [],
     centers: Array.isArray(json.centers) ? json.centers : [],
     handles: Array.isArray(json.handles) ? json.handles : [],
     plans: Array.isArray(json.plans) ? json.plans : [],
+    videos: Array.isArray(json.videos) ? json.videos : [],
   };
 }
 
@@ -170,6 +172,15 @@ async function updateExerciseRepRange(name, defaultRepRange) {
     type: "exercise_update_rep_range",
     name,
     defaultRepRange,
+  });
+}
+
+async function saveVideoToSheet(exercise, equipment, url) {
+  return postToAppsScript({
+    type: "video_save",
+    exercise,
+    equipment: equipment || "",
+    url: url || "",
   });
 }
 
@@ -375,11 +386,13 @@ export default function App() {
 
   // ── Google Sheets data ──
   const [sheetData, setSheetData] = useState([]);
+  const [serverBest1RMMap, setServerBest1RMMap] = useState({}); // præ-aggregeret fra server
   const [sheetExercises, setSheetExercises] = useState([]); // [{name, primaryMuscle, secondaryMuscles, equipment, defaultRepRange}]
   const [sheetEquipment, setSheetEquipment] = useState([]); // [{name}]
   const [sheetCenters, setSheetCenters] = useState([]); // [{name}]
   const [sheetHandles, setSheetHandles] = useState([]); // [{name, equipment}]
   const [sheetPlans, setSheetPlans] = useState([]); // [{name, sets:[{exercise, equipment, handle, kg, reps, repsGoal, setType, notes, order}]}]
+  const [sheetVideos, setSheetVideos] = useState([]); // [{exercise, equipment, url}]
   const [sheetLoading, setSheetLoading] = useState(true);
   const [sheetError, setSheetError] = useState(null);
 
@@ -427,7 +440,6 @@ export default function App() {
   const [newExPrimary, setNewExPrimary] = useState("");
   const [newExSecondary, setNewExSecondary] = useState("");
   const [newExEquipment, setNewExEquipment] = useState("");
-  const [newExVideo, setNewExVideo] = useState("");
   const [newExRepMin, setNewExRepMin] = useState("8");
   const [newExRepMax, setNewExRepMax] = useState("12");
   const [savingEx, setSavingEx] = useState(false);
@@ -663,8 +675,40 @@ export default function App() {
     setHistoryEditData(null);
   }, []);
 
-  // STATS state
+  // STATS state + lazy loading
   const [statsEx, setStatsEx] = useState("");
+  const [exerciseDetailCache, setExerciseDetailCache] = useState({}); // { exercise: [records] }
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  const loadExerciseDetail = useCallback(async (exercise) => {
+    if (!exercise) return;
+    if (exerciseDetailCache[exercise]) return; // allerede cached
+    if (!isAppsScriptConfigured()) return; // kun med Apps Script
+    setLoadingDetail(true);
+    try {
+      const url = `${APPS_SCRIPT_URL}?type=exercise_detail&exercise=${encodeURIComponent(exercise)}`;
+      const res = await fetch(url, { cache: "no-store" });
+      if (res.ok) {
+        const text = await res.text();
+        if (!text.trim().startsWith("<")) {
+          const json = JSON.parse(text);
+          if (json.sets) {
+            setExerciseDetailCache(prev => ({ ...prev, [exercise]: json.sets }));
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Exercise detail fetch failed:", e);
+    } finally {
+      setLoadingDetail(false);
+    }
+  }, [exerciseDetailCache]);
+
+  // Alle records for en specifik øvelse: detail cache > allRecords
+  const getRecordsForExercise = useCallback((exercise) => {
+    if (exerciseDetailCache[exercise]) return exerciseDetailCache[exercise];
+    return allRecords.filter(r => r.exercise === exercise);
+  }, [exerciseDetailCache, allRecords]);
 
   // ── Alle records ──
   const allData = useMemo(() => SEED_DATA.map(r => ({
@@ -688,14 +732,16 @@ export default function App() {
     let cancelled = false;
     setSheetLoading(true);
     fetchAllData()
-      .then(({ sets, exercises, equipment, centers, handles, plans }) => {
+      .then(({ sets, best1RMMap, exercises, equipment, centers, handles, plans, videos }) => {
         if (cancelled) return;
         setSheetData(sets);
+        if (best1RMMap && Object.keys(best1RMMap).length) setServerBest1RMMap(best1RMMap);
         setSheetExercises(exercises);
         setSheetEquipment(equipment);
         setSheetCenters(centers || []);
         setSheetHandles(handles || []);
         setSheetPlans(plans || []);
+        setSheetVideos(videos || []);
         setSheetError(null);
       })
       .catch(err => {
@@ -711,13 +757,15 @@ export default function App() {
   const refreshSheet = useCallback(async () => {
     setSheetLoading(true);
     try {
-      const { sets, exercises, equipment, centers, handles, plans } = await fetchAllData();
+      const { sets, best1RMMap, exercises, equipment, centers, handles, plans, videos } = await fetchAllData();
       setSheetData(sets);
+      if (best1RMMap && Object.keys(best1RMMap).length) setServerBest1RMMap(best1RMMap);
       setSheetExercises(exercises);
       setSheetEquipment(equipment);
       setSheetCenters(centers || []);
       setSheetHandles(handles || []);
       setSheetPlans(plans || []);
+      setSheetVideos(videos || []);
       setSheetError(null);
       showToast(`${sets.length} sets loaded ✓`, true);
     } catch (err) {
@@ -740,7 +788,6 @@ export default function App() {
       secondaryMuscles: newExSecondary.trim(),
       equipment: newExEquipment.trim(),
       defaultRepRange: buildRepRange(newExRepMin, newExRepMax),
-      videoUrl: newExVideo.trim(),
     });
     if (ok) {
       setSheetExercises(prev => {
@@ -751,15 +798,14 @@ export default function App() {
           secondaryMuscles: newExSecondary.trim(),
           equipment: newExEquipment.trim(),
           defaultRepRange: buildRepRange(newExRepMin, newExRepMax),
-          videoUrl: newExVideo.trim(),
-        }];
+            }];
       });
-      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepMin("8"); setNewExRepMax("12"); setNewExVideo("");
+      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepMin("8"); setNewExRepMax("12");
       setShowAddEx(false);
       showToast(`"${name}" added ✓`, true);
     } else {
       setCustomExercises(p => [...p, name]);
-      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepMin("8"); setNewExRepMax("12"); setNewExVideo("");
+      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepMin("8"); setNewExRepMax("12");
       setShowAddEx(false);
       showToast("Could not save to Sheets — local only", false);
     }
@@ -825,16 +871,18 @@ export default function App() {
 
   // ── best1RM map ──
   // Nøgle: exercise|equipment|handle|center — så samme øvelse på forskellig handle/center
-  // har sit eget 1RM-track (fx Bicep Curl med Rope ≠ Bicep Curl med Bar).
+  // best1RMMap: merger server-præ-aggregeret (dækker alle sæt) med lokalt beregnet (dækker recent + nye)
   const best1RMMap = useMemo(() => {
-    const map = {};
+    // Start med server-aggregat (dækker hele historikken)
+    const map = { ...serverBest1RMMap };
+    // Merge med lokalt beregnede (seneste sæt + ny session-data)
     for (const r of allRecords) {
       if (!r.exercise || !r.equipment || !r.oneRepMax) continue;
       const key = `${r.exercise}||${r.equipment}||${r.handle||""}||${r.center||""}`;
       if (!map[key] || r.oneRepMax > map[key]) map[key] = r.oneRepMax;
     }
     return map;
-  }, [allRecords]);
+  }, [allRecords, serverBest1RMMap]);
 
   // Helper: hent bedste 1RM. Hvis handle/center er specificeret, vises kun det
   // matching slice. Hvis ikke, returneres bedste på tværs af alle varianter.
@@ -914,11 +962,22 @@ export default function App() {
         secondaryMuscles: e.secondaryMuscles || "",
         equipment: e.equipment || "",
         defaultRepRange: e.defaultRepRange || "",
-        videoUrl: e.videoUrl || "",
       };
     }
     return map;
   }, [sheetExercises]);
+
+  // Video lookup: [{exercise, equipment, url}] — henter URL pr. (øvelse, redskab)
+  const getVideoUrl = useCallback((exercise, equipment) => {
+    if (!exercise) return null;
+    // Præcist match: øvelse + redskab
+    const exact = sheetVideos.find(v =>
+      v.exercise === exercise && v.equipment === (equipment || "")
+    );
+    if (exact) return exact.url;
+    // Fallback: øvelse uden redskab
+    return sheetVideos.find(v => v.exercise === exercise && !v.equipment)?.url || null;
+  }, [sheetVideos]);
 
   // Helper: hvilke redskaber kan en given øvelse laves med?
   // Prioritet: 1) Øvelser-arkets Redskab-kolonne, 2) hvad brugeren faktisk har brugt før, 3) alle redskaber
@@ -1462,7 +1521,7 @@ export default function App() {
                     {/* SET TYPE + NOTES som kollapsbar sektion */}
                     {(() => {
                       const hasExtra = e.setType !== "NORMAL SET" || e.notes;
-                      const videoUrl = exerciseMuscleMap[e.exercise]?.videoUrl;
+                      const videoUrl = getVideoUrl(e.exercise, e.equipment);
                       return (
                         <>
                           <div style={{ display:"flex", gap:6, marginBottom: e.showExtras ? 10 : 0, flexWrap:"wrap" }}>
@@ -1601,9 +1660,7 @@ export default function App() {
                 <input type="number" style={S.input} value={newExRepMax} placeholder="Max (e.g. 12)"
                   onChange={e => setNewExRepMax(e.target.value)} />
               </div>
-              <label style={S.label}>VIDEO URL (YouTube)</label>
-              <input style={{...S.input, marginBottom:10}} value={newExVideo}
-                onChange={e => setNewExVideo(e.target.value)} placeholder="https://youtube.com/..." />
+
               <div style={{ display:"flex", gap:8 }}>
                 <button
                   style={{...S.btn, flex:1, opacity: savingEx ? 0.6 : 1}}
@@ -1614,7 +1671,7 @@ export default function App() {
                 </button>
                 <button
                   style={S.btnGhost}
-                  onClick={() => { setShowAddEx(false); setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepMin("8"); setNewExRepMax("12"); setNewExVideo(""); }}
+                  onClick={() => { setShowAddEx(false); setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepMin("8"); setNewExRepMax("12"); }}
                 >Cancel</button>
               </div>
               <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:8, letterSpacing:"0.05em" }}>
@@ -1692,32 +1749,39 @@ export default function App() {
                           Used as default when logging this exercise.
                         </div>
                       </div>
-                      {/* Video URL */}
+                      {/* Video URLs — pr. redskab */}
                       <div style={{ marginBottom:10 }}>
-                        <label style={S.label}>VIDEO URL</label>
-                        {exerciseMuscleMap[ex]?.videoUrl ? (
-                          <div style={{ display:"flex", gap:6, alignItems:"center" }}>
-                            <a href={exerciseMuscleMap[ex].videoUrl} target="_blank" rel="noopener noreferrer"
-                              style={{ flex:1, fontSize:10, color:"var(--error-mid)", textDecoration:"none", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                              ▶ {exerciseMuscleMap[ex].videoUrl.replace("https://","").slice(0,40)}…
-                            </a>
-                          </div>
-                        ) : (
-                          <input style={S.input} placeholder="https://youtube.com/..." defaultValue=""
-                            onBlur={ev => {
-                              const url = ev.target.value.trim();
-                              if (url) {
-                                postToAppsScript({ type:"exercise_update_video", name: ex, videoUrl: url })
+                        <label style={S.label}>VIDEOS</label>
+                        <div style={{ fontSize:9, color:"var(--text-faint)", marginBottom:6, letterSpacing:"0.04em" }}>
+                          Tilføj YouTube-link pr. redskab — vises som ▶ VIDEO badge i LOG.
+                        </div>
+                        {/* Eksisterende redskaber + eventuelle gemte videoer */}
+                        {[...new Set([
+                          ...eqList,
+                          ...sheetVideos.filter(v => v.exercise === ex).map(v => v.equipment).filter(Boolean),
+                          ""
+                        ])].map(eq => {
+                          const existingUrl = sheetVideos.find(v => v.exercise === ex && v.equipment === eq)?.url || "";
+                          const inputId = `vid_${ex}_${eq}`;
+                          return (
+                            <VideoRow key={eq} exercise={ex} equipment={eq} existingUrl={existingUrl}
+                              onSave={(url) => {
+                                postToAppsScript({ type:"video_save", exercise: ex, equipment: eq, url })
                                   .then(ok => {
                                     if (ok) {
-                                      setSheetExercises(prev => prev.map(e => e.name === ex ? {...e, videoUrl: url} : e));
-                                      showToast("Video saved ✓", true);
+                                      setSheetVideos(prev => {
+                                        const filtered = prev.filter(v => !(v.exercise === ex && v.equipment === eq));
+                                        return url ? [...filtered, { exercise: ex, equipment: eq, url }] : filtered;
+                                      });
+                                      showToast(url ? "Video saved ✓" : "Video removed", true);
+                                    } else {
+                                      showToast("Could not save video", false);
                                     }
                                   });
-                              }
-                            }}
-                          />
-                        )}
+                              }}
+                            />
+                          );
+                        })}
                       </div>
                       {/* Redskaber med 1RM */}
                       {eqList.length > 0 && (
@@ -2343,12 +2407,26 @@ export default function App() {
         <div style={S.page}>
           <div style={{ marginBottom:12 }}>
             <label style={S.label}>EXERCISE</label>
-            <select style={S.select} value={statsEx} onChange={e => setStatsEx(e.target.value)}>
+            <select style={S.select} value={statsEx} onChange={e => {
+              setStatsEx(e.target.value);
+              loadExerciseDetail(e.target.value);
+            }}>
               <option value="">— CHOOSE EXERCISE —</option>
               {allExercises.map(ex => <option key={ex}>{ex}</option>)}
             </select>
           </div>
-          {statsEx && <StatsView exercise={statsEx} allRecords={allRecords} best1RMMap={best1RMMap} />}
+          {loadingDetail && statsEx && (
+            <div style={{ fontSize:10, color:"var(--text-muted)", textAlign:"center", padding:"20px 0", letterSpacing:"0.08em" }}>
+              ↻ LOADING FULL HISTORY…
+            </div>
+          )}
+          {statsEx && !loadingDetail && (
+            <StatsView
+              exercise={statsEx}
+              allRecords={getRecordsForExercise(statsEx)}
+              best1RMMap={best1RMMap}
+            />
+          )}
         </div>
       )}
 
@@ -2360,7 +2438,7 @@ export default function App() {
 
 // ─── STATS VIEW ───────────────────────────────────────────────────────────────
 function StatsView({ exercise, allRecords, best1RMMap }) {
-  const [showAllEq, setShowAllEq] = React.useState({});
+  const [showAllEq, setShowAllEq] = useState({});
   const records = allRecords.filter(r => r.exercise === exercise && r.oneRepMax);
   const equipment = [...new Set(records.map(r => r.equipment).filter(Boolean))];
 
@@ -2461,5 +2539,66 @@ function ProgressChart({ records }) {
       <text x={pts[0].x} y={H - 2} textAnchor="middle" fill="var(--text-dim)" fontSize={7} fontFamily="DM Mono, monospace">{toDisplay(pts[0].date)?.slice(-5)}</text>
       <text x={pts[pts.length-1].x} y={H - 2} textAnchor="middle" fill="var(--text-dim)" fontSize={7} fontFamily="DM Mono, monospace">{toDisplay(pts[pts.length-1].date)?.slice(-5)}</text>
     </svg>
+  );
+}
+
+// ─── VIDEO ROW ────────────────────────────────────────────────────────────────
+function VideoRow({ exercise, equipment, existingUrl, onSave }) {
+  const [url, setUrl] = useState(existingUrl || "");
+  const [saving, setSaving] = useState(false);
+  const changed = url !== (existingUrl || "");
+
+  const label = equipment
+    ? equipment
+    : "General (no equipment)";
+
+  return (
+    <div style={{ marginBottom:8 }}>
+      <div style={{ fontSize:9, color:"var(--text-label)", letterSpacing:"0.08em", marginBottom:3 }}>
+        {label}
+      </div>
+      <div style={{ display:"flex", gap:6 }}>
+        {url && !changed ? (
+          <a href={url} target="_blank" rel="noopener noreferrer"
+            style={{ flex:1, fontSize:11, color:"var(--error-mid)", textDecoration:"none",
+              background:"var(--accent-bg)", border:"1px solid var(--accent-border)",
+              borderRadius:6, padding:"7px 10px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+            ▶ {url.replace("https://","").slice(0,36)}…
+          </a>
+        ) : (
+          <input
+            style={{ ...{width:"100%", background:"var(--bg)", border:"1px solid var(--border-input)",
+              borderRadius:6, padding:"7px 10px", color:"var(--text-primary)",
+              fontFamily:"'DM Mono', monospace", fontSize:12, boxSizing:"border-box", outline:"none"}, flex:1 }}
+            value={url}
+            onChange={e => setUrl(e.target.value)}
+            placeholder="https://youtube.com/..."
+          />
+        )}
+        {changed && (
+          <button
+            style={{ background:"var(--accent)", color:"var(--bg)", border:"none", borderRadius:6,
+              padding:"0 12px", fontSize:10, fontWeight:700, cursor:"pointer",
+              fontFamily:"'DM Mono', monospace", letterSpacing:"0.08em", opacity: saving ? 0.6 : 1 }}
+            disabled={saving}
+            onClick={async () => {
+              setSaving(true);
+              await onSave(url.trim());
+              setSaving(false);
+            }}>
+            {saving ? "…" : "SAVE"}
+          </button>
+        )}
+        {url && !changed && (
+          <button
+            style={{ background:"none", border:"1px solid var(--border-input)", borderRadius:6,
+              padding:"0 10px", fontSize:10, color:"var(--text-faint)", cursor:"pointer",
+              fontFamily:"'DM Mono', monospace" }}
+            onClick={() => setUrl("")}>
+            ✕
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
