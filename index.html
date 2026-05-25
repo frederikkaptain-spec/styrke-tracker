@@ -4,6 +4,134 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Styrke Tracker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+    <style>
+      /* ── DARK THEME (default) ──────────────────────────────────────── */
+      :root {
+        --bg:              #0d0d10;
+        --card:            #111114;
+        --accent-bg:       #0c1800;
+        --accent-bg-mid:   #1a2a00;
+        --border:          #1c1c20;
+        --border-input:    #252528;
+        --border-subtle:   #1a1a1e;
+        --border-faint:    #161618;
+        --accent-border:   #1a2e00;
+        --text-primary:    #e4e4dc;
+        --text-secondary:  #aaa;
+        --text-muted:      #888;
+        --text-dim:        #666;
+        --text-label:      #555;
+        --text-faint:      #444;
+        --accent:          #b8e840;
+        --accent-dim:      #4a6a00;
+        --error:           #ff6b6b;
+        --error-bg:        #2a0a0a;
+        --error-border:    #600;
+        --error-dim:       #774444;
+        --error-mid:       #a04040;
+        --error-muted:     #cc8888;
+        --error-light:     #ff9999;
+      }
+
+      /* ── LIGHT THEME ───────────────────────────────────────────────── */
+      :root.light,
+      @media (prefers-color-scheme: light) { :root:not(.dark) {
+        --bg:              #EEF2FF;
+        --card:            #FFFFFF;
+        --accent-bg:       #E8F0FF;
+        --accent-bg-mid:   #D0DCFF;
+        --border:          #D1D9F5;
+        --border-input:    #C4CFEE;
+        --border-subtle:   #DAE2F8;
+        --border-faint:    #E5ECFF;
+        --accent-border:   #93B4FF;
+        --text-primary:    #0D1B5E;
+        --text-secondary:  #5A6A9A;
+        --text-muted:      #7A8ABD;
+        --text-dim:        #8A96C4;
+        --text-label:      #6A7AB0;
+        --text-faint:      #8090C0;
+        --accent:          #2347C8;
+        --accent-dim:      #4A6AE8;
+        --error:           #DC2626;
+        --error-bg:        #FEF2F2;
+        --error-border:    #FECACA;
+        --error-dim:       #B91C1C;
+        --error-mid:       #EF4444;
+        --error-muted:     #F87171;
+        --error-light:     #FCA5A5;
+      }}
+
+      /* Explicit light class override (fra manuel toggle) */
+      :root.light {
+        --bg:              #EEF2FF;
+        --card:            #FFFFFF;
+        --accent-bg:       #E8F0FF;
+        --accent-bg-mid:   #D0DCFF;
+        --border:          #D1D9F5;
+        --border-input:    #C4CFEE;
+        --border-subtle:   #DAE2F8;
+        --border-faint:    #E5ECFF;
+        --accent-border:   #93B4FF;
+        --text-primary:    #0D1B5E;
+        --text-secondary:  #5A6A9A;
+        --text-muted:      #7A8ABD;
+        --text-dim:        #8A96C4;
+        --text-label:      #6A7AB0;
+        --text-faint:      #8090C0;
+        --accent:          #2347C8;
+        --accent-dim:      #4A6AE8;
+        --error:           #DC2626;
+        --error-bg:        #FEF2F2;
+        --error-border:    #FECACA;
+        --error-dim:       #B91C1C;
+        --error-mid:       #EF4444;
+        --error-muted:     #F87171;
+        --error-light:     #FCA5A5;
+      }
+
+      /* ── BASE STYLES ────────────────────────────────────────────────── */
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: 'DM Mono', monospace;
+        background: var(--bg);
+        color: var(--text-primary);
+        transition: background 0.25s ease, color 0.25s ease;
+      }
+
+      /* Smooth transitions på alle elementer ved theme-skift */
+      *, *::before, *::after {
+        transition:
+          background-color 0.2s ease,
+          border-color 0.2s ease,
+          color 0.15s ease,
+          box-shadow 0.2s ease;
+      }
+
+      /* Input/select styling — bruger CSS vars */
+      input, select, textarea {
+        color-scheme: dark;
+        background: var(--bg);
+        color: var(--text-primary);
+        border-color: var(--border-input);
+      }
+
+      :root.light input,
+      :root.light select,
+      :root.light textarea {
+        color-scheme: light;
+      }
+
+      /* Scrollbar */
+      ::-webkit-scrollbar { width: 4px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
