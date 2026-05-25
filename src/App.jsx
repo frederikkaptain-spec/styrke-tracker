@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby-IQK_x55eJZ5x3cUu6Lbz6bCnS8SiYrgOpNETFQ9eRM-AotWoXzrCqrFbGsVdMZDF/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzIKm91xC8Ndrd_Sl__lYb7eLFIohJVnfNM_1JX9xmUrMQbaPwi1kIYL1PUyfboMpyY/exec";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
