@@ -2244,7 +2244,6 @@ export default function App() {
             const filteredDays = daysGrouped
               .map(d => ({
                 ...d,
-                    <div style={{ minWidth:0, flex:1 }}>
                 records: d.records.filter(r =>
                   (!histEx || r.exercise === histEx) &&
                   (!histEq || r.equipment === histEq) &&
@@ -2272,6 +2271,7 @@ export default function App() {
                     style={{ display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer", userSelect:"none" }}
                     onClick={() => setExpandedDay(isOpen ? null : day.date)}
                   >
+                    <div style={{ minWidth:0, flex:1 }}>
                       <div style={{ fontSize:13, color:"var(--text-primary)", fontWeight:600 }}>{toDisplay(day.date)}</div>
                       <div style={{ fontSize:10, color:"var(--text-label)", marginTop:2 }}>
                         {(() => {
