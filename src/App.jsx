@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwoNYPQkt-UlvMu7YUocFKCbuODFcu4Qj864qksfyVIQm4S9w8bwtQikYPkKURISO8M/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxkMHvckHdhm6oqO8JLESbCPGMjdcOxbxOStsSj9VYk6PBjsyLK_yq2Mrslcuigl7dd/exec";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
@@ -207,6 +207,38 @@ function normalizeKg(kg, equipment) {
   return equipment.toLowerCase().includes("dumbbell") ? kg * 2 : kg;
 }
 
+// ─── DATE HELPERS ─────────────────────────────────────────────────────────────
+function toDisplay(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return d && m && y ? `${d}/${m}/${y}` : iso;
+}
+function fromDisplay(display) {
+  if (!display) return "";
+  const [d, m, y] = display.split("/");
+  return d && m && y ? `${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}` : display;
+}
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// ─── REP RANGE HELPERS ────────────────────────────────────────────────────────
+function parseRepRange(str) {
+  if (!str) return { min: "", max: "" };
+  const clean = str.replace(/\s*sek\.?\s*$/i, "").trim();
+  const dashIdx = clean.lastIndexOf("-");
+  // Undgå at splitte på "30-60 sek." ved negativt indeks
+  if (dashIdx > 0) return { min: clean.slice(0, dashIdx).trim(), max: clean.slice(dashIdx + 1).trim() };
+  return { min: clean, max: "" };
+}
+function buildRepRange(min, max) {
+  const m = String(min || "").trim();
+  const x = String(max || "").trim();
+  if (!m && !x) return "";
+  if (!x) return m;
+  return `${m}-${x}`;
+}
+
 // ─── HISTORISK DATA ───────────────────────────────────────────────────────────
 // Sheet er nu eneste kilde for både øvelser, redskaber og træningsdata.
 const SEED_DATA = [];
@@ -352,7 +384,7 @@ export default function App() {
   const [sheetError, setSheetError] = useState(null);
 
   // LOG state — multi-sæt session builder
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const [sessionDate, setSessionDate] = useState(today);
   const [sessionCenter, setSessionCenter] = useState(""); // valgfri — kan være tom
   const newSetId = () => `s_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -360,7 +392,7 @@ export default function App() {
     id: newSetId(),
     exercise: "", equipment: "", handle: "", kg: "", reps: "",
     repsGoal: "8-10", setType: "NORMAL SET", notes: "",
-    collapsed: false,
+    collapsed: false, showExtras: false,
   });
   const [entries, setEntries] = useState([blankEntry()]);
   const [saving, setSaving] = useState(false);
@@ -395,7 +427,9 @@ export default function App() {
   const [newExPrimary, setNewExPrimary] = useState("");
   const [newExSecondary, setNewExSecondary] = useState("");
   const [newExEquipment, setNewExEquipment] = useState("");
-  const [newExRepRange, setNewExRepRange] = useState("8-10");
+  const [newExVideo, setNewExVideo] = useState("");
+  const [newExRepMin, setNewExRepMin] = useState("8");
+  const [newExRepMax, setNewExRepMax] = useState("12");
   const [savingEx, setSavingEx] = useState(false);
 
   // REDSKABER state
@@ -569,12 +603,65 @@ export default function App() {
 
   const [showImportPlan, setShowImportPlan] = useState(false);
   const [importPlanName, setImportPlanName] = useState("");
+  const [showImportSessionToPlan, setShowImportSessionToPlan] = useState(false);
+  const [importSessionForPlan, setImportSessionForPlan] = useState("");
 
   // HISTORIK state
   const [histEx, setHistEx] = useState("");
   const [histEq, setHistEq] = useState("");
   const [histCenter, setHistCenter] = useState("");
   const [expandedDay, setExpandedDay] = useState(null);
+  const [historyEditKey, setHistoryEditKey] = useState(null); // "date_idx"
+  const [historyEditData, setHistoryEditData] = useState(null);
+
+  const handleHistorySave = useCallback(async (original, edited, editKey) => {
+    const updatedRecord = {
+      ...original,
+      kg: parseFloat(edited.kg) || original.kg,
+      reps: parseInt(edited.reps) || original.reps,
+      notes: edited.notes ?? original.notes,
+      oneRepMax: calc1RM(parseFloat(edited.kg) || original.kg, parseInt(edited.reps) || original.reps),
+    };
+    // Send update til Apps Script
+    const ok = await postToAppsScript({
+      type: "set_update",
+      // Nøgle: original data til at finde rækken
+      original: {
+        dato: original.date,
+        oevelse: original.exercise,
+        redskab: original.equipment,
+        handle: original.handle || "",
+        center: original.center || "",
+        kg: String(original.kg ?? ""),
+        reps: String(original.reps ?? ""),
+      },
+      // Ny data
+      updated: {
+        kg: String(updatedRecord.kg),
+        reps: String(updatedRecord.reps),
+        notes: updatedRecord.notes || "",
+        orm: String(updatedRecord.oneRepMax || ""),
+      },
+    });
+    if (ok) {
+      // Opdater lokalt i sheetData
+      setSheetData(prev => prev.map(r => {
+        if (r.date === original.date
+          && r.exercise === original.exercise
+          && r.equipment === original.equipment
+          && String(r.kg) === String(original.kg)
+          && String(r.reps) === String(original.reps)) {
+          return updatedRecord;
+        }
+        return r;
+      }));
+      showToast("Set updated ✓", true);
+    } else {
+      showToast("Could not update set", false);
+    }
+    setHistoryEditKey(null);
+    setHistoryEditData(null);
+  }, []);
 
   // STATS state
   const [statsEx, setStatsEx] = useState("");
@@ -652,7 +739,8 @@ export default function App() {
       primaryMuscle: newExPrimary.trim(),
       secondaryMuscles: newExSecondary.trim(),
       equipment: newExEquipment.trim(),
-      defaultRepRange: newExRepRange,
+      defaultRepRange: buildRepRange(newExRepMin, newExRepMax),
+      videoUrl: newExVideo.trim(),
     });
     if (ok) {
       setSheetExercises(prev => {
@@ -662,20 +750,21 @@ export default function App() {
           primaryMuscle: newExPrimary.trim(),
           secondaryMuscles: newExSecondary.trim(),
           equipment: newExEquipment.trim(),
-          defaultRepRange: newExRepRange,
+          defaultRepRange: buildRepRange(newExRepMin, newExRepMax),
+          videoUrl: newExVideo.trim(),
         }];
       });
-      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepRange("8-10");
+      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepMin("8"); setNewExRepMax("12"); setNewExVideo("");
       setShowAddEx(false);
       showToast(`"${name}" added ✓`, true);
     } else {
       setCustomExercises(p => [...p, name]);
-      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepRange("8-10");
+      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepMin("8"); setNewExRepMax("12"); setNewExVideo("");
       setShowAddEx(false);
       showToast("Could not save to Sheets — local only", false);
     }
     setSavingEx(false);
-  }, [newExName, newExPrimary, newExSecondary, newExEquipment, newExRepRange]);
+  }, [newExName, newExPrimary, newExSecondary, newExEquipment, buildRepRange(newExRepMin, newExRepMax)]);
 
   // Update default rep range for an existing exercise
   const handleUpdateRepRange = useCallback(async (exName, newRange) => {
@@ -825,6 +914,7 @@ export default function App() {
         secondaryMuscles: e.secondaryMuscles || "",
         equipment: e.equipment || "",
         defaultRepRange: e.defaultRepRange || "",
+        videoUrl: e.videoUrl || "",
       };
     }
     return map;
@@ -1071,15 +1161,21 @@ export default function App() {
       {view === "log" && (
         <div style={S.page}>
           {/* Session: date + gym — applies to all sets */}
-          <div style={{...S.card, padding:"10px 14px", marginBottom:10}}>
-            <div style={{...S.grid2}}>
+          <div style={{...S.card, padding:"12px 14px", marginBottom:10}}>
+            <div style={S.grid2}>
               <div>
                 <label style={S.label}>DATE</label>
                 <input
-                  type="date"
+                  type="text"
                   style={S.input}
-                  value={sessionDate}
-                  onChange={e => setSessionDate(e.target.value)}
+                  placeholder="DD/MM/YYYY"
+                  value={toDisplay(sessionDate)}
+                  onChange={e => {
+                    const iso = fromDisplay(e.target.value);
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) setSessionDate(iso);
+                    else if (e.target.value.length <= 10) setSessionDate(iso || sessionDate);
+                  }}
+                  maxLength={10}
                 />
               </div>
               <div>
@@ -1143,7 +1239,7 @@ export default function App() {
                 ))}
               </select>
               <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:8, letterSpacing:"0.05em", lineHeight:1.5 }}>
-                Copies all sets from the chosen day into the log. Date is set to {sessionDate}. Adjust kg/reps as you do them today.
+                Copies all sets from the chosen day into the log. Date is set to {toDisplay(sessionDate)}. Adjust kg/reps as you do them today.
               </div>
               <button
                 style={{...S.btn, width:"100%", marginTop:10, opacity: importDay ? 1 : 0.4}}
@@ -1363,19 +1459,57 @@ export default function App() {
                       </div>
                     )}
 
-                    <div style={{ marginBottom:10 }}>
-                      <label style={S.label}>SET TYPE</label>
-                      <select style={S.select} value={e.setType}
-                        onChange={ev => updateEntry(e.id, { setType: ev.target.value })}>
-                        {SET_TYPES.map(t => <option key={t}>{t}</option>)}
-                      </select>
-                    </div>
-
-                    <div style={{ marginBottom:4 }}>
-                      <label style={S.label}>NOTES</label>
-                      <input type="text" style={S.input} placeholder="Optional..." value={e.notes}
-                        onChange={ev => updateEntry(e.id, { notes: ev.target.value })} />
-                    </div>
+                    {/* SET TYPE + NOTES som kollapsbar sektion */}
+                    {(() => {
+                      const hasExtra = e.setType !== "NORMAL SET" || e.notes;
+                      const videoUrl = exerciseMuscleMap[e.exercise]?.videoUrl;
+                      return (
+                        <>
+                          <div style={{ display:"flex", gap:6, marginBottom: e.showExtras ? 10 : 0, flexWrap:"wrap" }}>
+                            {/* Set type badge — vis altid hvis ikke NORMAL SET */}
+                            {e.setType !== "NORMAL SET" && (
+                              <span style={{ ...S.tagGreen, fontSize:9, padding:"3px 8px" }}>{e.setType}</span>
+                            )}
+                            {/* Notes badge */}
+                            {e.notes && (
+                              <span style={{ ...S.tag, fontSize:9, maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                📝 {e.notes}
+                              </span>
+                            )}
+                            {/* Video badge */}
+                            {videoUrl && (
+                              <a href={videoUrl} target="_blank" rel="noopener noreferrer"
+                                style={{ ...S.tag, fontSize:9, color:"var(--error-mid)", textDecoration:"none", cursor:"pointer" }}
+                                onClick={ev => ev.stopPropagation()}>
+                                ▶ VIDEO
+                              </a>
+                            )}
+                            {/* Toggle extras */}
+                            <button
+                              style={{ background:"none", border:"none", cursor:"pointer", fontSize:9, color:"var(--text-faint)", padding:"3px 6px", letterSpacing:"0.06em", fontFamily:"'DM Mono', monospace" }}
+                              onClick={() => updateEntry(e.id, { showExtras: !e.showExtras })}>
+                              {e.showExtras ? "▲ LESS" : `⋯ MORE${hasExtra ? " ●" : ""}`}
+                            </button>
+                          </div>
+                          {e.showExtras && (
+                            <div style={{ borderTop:`1px solid var(--border-faint)`, paddingTop:10, marginTop:4 }}>
+                              <div style={{ marginBottom:10 }}>
+                                <label style={S.label}>SET TYPE</label>
+                                <select style={S.select} value={e.setType}
+                                  onChange={ev => updateEntry(e.id, { setType: ev.target.value })}>
+                                  {SET_TYPES.map(t => <option key={t}>{t}</option>)}
+                                </select>
+                              </div>
+                              <div style={{ marginBottom:4 }}>
+                                <label style={S.label}>NOTES</label>
+                                <input type="text" style={S.input} placeholder="Optional..." value={e.notes}
+                                  onChange={ev => updateEntry(e.id, { notes: ev.target.value })} />
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </>
                 )}
               </div>
@@ -1461,10 +1595,15 @@ export default function App() {
               <input style={{...S.input, marginBottom:8}} value={newExEquipment}
                 onChange={e => setNewExEquipment(e.target.value)} placeholder="e.g. BARBELL, DUMBBELLS (comma-separated)" />
               <label style={S.label}>DEFAULT REP RANGE</label>
-              <select style={{...S.select, marginBottom:10}} value={newExRepRange}
-                onChange={e => setNewExRepRange(e.target.value)}>
-                {REP_RANGES.map(r => <option key={r}>{r}</option>)}
-              </select>
+              <div style={{...S.grid2, marginBottom:8}}>
+                <input type="number" style={S.input} value={newExRepMin} placeholder="Min (e.g. 8)"
+                  onChange={e => setNewExRepMin(e.target.value)} />
+                <input type="number" style={S.input} value={newExRepMax} placeholder="Max (e.g. 12)"
+                  onChange={e => setNewExRepMax(e.target.value)} />
+              </div>
+              <label style={S.label}>VIDEO URL (YouTube)</label>
+              <input style={{...S.input, marginBottom:10}} value={newExVideo}
+                onChange={e => setNewExVideo(e.target.value)} placeholder="https://youtube.com/..." />
               <div style={{ display:"flex", gap:8 }}>
                 <button
                   style={{...S.btn, flex:1, opacity: savingEx ? 0.6 : 1}}
@@ -1475,7 +1614,7 @@ export default function App() {
                 </button>
                 <button
                   style={S.btnGhost}
-                  onClick={() => { setShowAddEx(false); setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepRange("8-10"); }}
+                  onClick={() => { setShowAddEx(false); setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepMin("8"); setNewExRepMax("12"); setNewExVideo(""); }}
                 >Cancel</button>
               </div>
               <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:8, letterSpacing:"0.05em" }}>
@@ -1529,17 +1668,56 @@ export default function App() {
                       {/* Default rep range (kan ændres) */}
                       <div style={{ marginBottom:10 }}>
                         <label style={S.label}>DEFAULT REP RANGE</label>
-                        <select
-                          style={S.select}
-                          value={(exerciseMuscleMap[ex] && exerciseMuscleMap[ex].defaultRepRange) || ""}
-                          onChange={ev => handleUpdateRepRange(ex, ev.target.value)}
-                        >
-                          <option value="">— not set —</option>
-                          {REP_RANGES.map(r => <option key={r}>{r}</option>)}
-                        </select>
+                        <div style={S.grid2}>
+                          <input type="number" style={S.input}
+                            value={parseRepRange((exerciseMuscleMap[ex] && exerciseMuscleMap[ex].defaultRepRange) || "").min}
+                            placeholder="Min"
+                            onChange={ev => {
+                              const cur = (exerciseMuscleMap[ex] && exerciseMuscleMap[ex].defaultRepRange) || "";
+                              const max = parseRepRange(cur).max;
+                              handleUpdateRepRange(ex, buildRepRange(ev.target.value, max));
+                            }}
+                          />
+                          <input type="number" style={S.input}
+                            value={parseRepRange((exerciseMuscleMap[ex] && exerciseMuscleMap[ex].defaultRepRange) || "").max}
+                            placeholder="Max"
+                            onChange={ev => {
+                              const cur = (exerciseMuscleMap[ex] && exerciseMuscleMap[ex].defaultRepRange) || "";
+                              const min = parseRepRange(cur).min;
+                              handleUpdateRepRange(ex, buildRepRange(min, ev.target.value));
+                            }}
+                          />
+                        </div>
                         <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:4, letterSpacing:"0.05em" }}>
                           Used as default when logging this exercise.
                         </div>
+                      </div>
+                      {/* Video URL */}
+                      <div style={{ marginBottom:10 }}>
+                        <label style={S.label}>VIDEO URL</label>
+                        {exerciseMuscleMap[ex]?.videoUrl ? (
+                          <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                            <a href={exerciseMuscleMap[ex].videoUrl} target="_blank" rel="noopener noreferrer"
+                              style={{ flex:1, fontSize:10, color:"var(--error-mid)", textDecoration:"none", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                              ▶ {exerciseMuscleMap[ex].videoUrl.replace("https://","").slice(0,40)}…
+                            </a>
+                          </div>
+                        ) : (
+                          <input style={S.input} placeholder="https://youtube.com/..." defaultValue=""
+                            onBlur={ev => {
+                              const url = ev.target.value.trim();
+                              if (url) {
+                                postToAppsScript({ type:"exercise_update_video", name: ex, videoUrl: url })
+                                  .then(ok => {
+                                    if (ok) {
+                                      setSheetExercises(prev => prev.map(e => e.name === ex ? {...e, videoUrl: url} : e));
+                                      showToast("Video saved ✓", true);
+                                    }
+                                  });
+                              }
+                            }}
+                          />
+                        )}
                       </div>
                       {/* Redskaber med 1RM */}
                       {eqList.length > 0 && (
@@ -1832,6 +2010,47 @@ export default function App() {
               placeholder="e.g. Push Day A" />
           </div>
 
+          {/* Import session som udgangspunkt for planen */}
+          <div style={{ marginBottom:10 }}>
+            <button style={{...S.btnGhost, width:"100%", padding:"9px", fontSize:10, letterSpacing:"0.08em"}}
+              onClick={() => setShowImportSessionToPlan(p => !p)}>
+              {showImportSessionToPlan ? "▲ CLOSE" : "↓ IMPORT SESSION AS STARTING POINT"}
+            </button>
+            {showImportSessionToPlan && (
+              <div style={{...S.card, marginTop:6}}>
+                <label style={S.label}>CHOOSE SESSION</label>
+                <select style={{...S.select, marginBottom:8}} value={importSessionForPlan}
+                  onChange={e => setImportSessionForPlan(e.target.value)}>
+                  <option value="">— CHOOSE DAY —</option>
+                  {daysGrouped.map(d => (
+                    <option key={d.date} value={d.date}>
+                      {toDisplay(d.date)} · {d.records.length} sets · {d.exercises.slice(0,3).join(", ")}
+                    </option>
+                  ))}
+                </select>
+                <button style={{...S.btn, width:"100%", fontSize:10, opacity: importSessionForPlan ? 1 : 0.4}}
+                  disabled={!importSessionForPlan}
+                  onClick={() => {
+                    const day = daysGrouped.find(d => d.date === importSessionForPlan);
+                    if (!day) return;
+                    setPlanSets(day.records.map(r => ({
+                      id: `p_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+                      exercise: r.exercise || "", equipment: r.equipment || "",
+                      handle: r.handle || "", kg: r.kg ? String(r.kg) : "",
+                      reps: r.reps ? String(r.reps) : "",
+                      repsGoal: r.repsGoal || "", setType: r.setType || "NORMAL SET",
+                      notes: r.notes || "",
+                    })));
+                    if (!planName) setPlanName(toDisplay(importSessionForPlan));
+                    setShowImportSessionToPlan(false);
+                    setImportSessionForPlan("");
+                  }}>
+                  LOAD SESSION →
+                </button>
+              </div>
+            )}
+          </div>
+
           <div style={{ fontSize:10, color:"var(--text-dim)", marginBottom:6, letterSpacing:"0.08em" }}>
             PLAN · {planSets.length} {planSets.length === 1 ? "set" : "sets"}
           </div>
@@ -1899,21 +2118,23 @@ export default function App() {
                       placeholder="optional" />
                   </div>
                 </div>
-                <div style={{...S.grid2, marginBottom:10}}>
-                  <div>
-                    <label style={S.label}>REP RANGE</label>
-                    <select style={S.select} value={s.repsGoal}
-                      onChange={ev => updatePlanSet(s.id, { repsGoal: ev.target.value })}>
-                      {REP_RANGES.map(r => <option key={r}>{r}</option>)}
-                    </select>
+                <div style={{ marginBottom:10 }}>
+                  <label style={S.label}>REP RANGE</label>
+                  <div style={S.grid2}>
+                    <input type="number" style={S.input}
+                      value={parseRepRange(s.repsGoal).min} placeholder="Min"
+                      onChange={ev => updatePlanSet(s.id, { repsGoal: buildRepRange(ev.target.value, parseRepRange(s.repsGoal).max) })} />
+                    <input type="number" style={S.input}
+                      value={parseRepRange(s.repsGoal).max} placeholder="Max"
+                      onChange={ev => updatePlanSet(s.id, { repsGoal: buildRepRange(parseRepRange(s.repsGoal).min, ev.target.value) })} />
                   </div>
-                  <div>
-                    <label style={S.label}>SET TYPE</label>
-                    <select style={S.select} value={s.setType}
-                      onChange={ev => updatePlanSet(s.id, { setType: ev.target.value })}>
-                      {SET_TYPES.map(t => <option key={t}>{t}</option>)}
-                    </select>
-                  </div>
+                </div>
+                <div style={{ marginBottom:10 }}>
+                  <label style={S.label}>SET TYPE</label>
+                  <select style={S.select} value={s.setType}
+                    onChange={ev => updatePlanSet(s.id, { setType: ev.target.value })}>
+                    {SET_TYPES.map(t => <option key={t}>{t}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label style={S.label}>NOTES</label>
@@ -1989,7 +2210,7 @@ export default function App() {
                     onClick={() => setExpandedDay(isOpen ? null : day.date)}
                   >
                     <div style={{ minWidth:0, flex:1 }}>
-                      <div style={{ fontSize:13, color:"var(--text-primary)", fontWeight:600 }}>{day.date}</div>
+                      <div style={{ fontSize:13, color:"var(--text-primary)", fontWeight:600 }}>{toDisplay(day.date)}</div>
                       <div style={{ fontSize:10, color:"var(--text-label)", marginTop:2 }}>
                         {(() => {
                           const centersForDay = [...new Set(day.records.map(r => r.center).filter(Boolean))];
@@ -2012,39 +2233,102 @@ export default function App() {
                     <div style={{ marginTop:10, borderTop:"1px solid var(--border-subtle)", paddingTop:8 }}>
                       {day.records.map((r, i) => {
                         const isPR = r.oneRepMax && getBest1RM(r.exercise, r.equipment, r.handle, r.center) === r.oneRepMax;
+                        const editKey = `${day.date}_${i}`;
+                        const isEditing = historyEditKey === editKey;
                         return (
-                          <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #161618" }}>
-                            <div style={{ minWidth:0, flex:1 }}>
-                              <div style={{ fontSize:12, color:"var(--text-primary)" }}>
-                                {r.exercise}
-                                {isPR && <span style={{...S.tagGreen, marginLeft:6}}>PR</span>}
+                          <div key={i} style={{ padding:"6px 0", borderBottom:"1px solid var(--border-faint)" }}>
+                            {!isEditing ? (
+                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                                <div style={{ minWidth:0, flex:1 }}>
+                                  <div style={{ fontSize:12, color:"var(--text-primary)" }}>
+                                    {r.exercise}
+                                    {isPR && <span style={{...S.tagGreen, marginLeft:6}}>PR</span>}
+                                  </div>
+                                  <div style={{ fontSize:10, color:"var(--text-faint)", marginTop:1 }}>
+                                    {r.equipment}{r.handle ? ` · ${r.handle}` : ""}
+                                    {r.center && <span style={{ color:"var(--accent-dim)" }}> · {r.center}</span>}
+                                  </div>
+                                </div>
+                                <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
+                                  <div style={{ textAlign:"right" }}>
+                                    <div style={{ fontSize:13, color:"var(--accent)", fontWeight:600 }}>
+                                      {r.kg != null ? r.kg : "—"} kg × {r.reps != null ? r.reps : "—"}
+                                    </div>
+                                    {r.oneRepMax && <div style={{ fontSize:9, color:"var(--text-faint)" }}>1RM ~{r.oneRepMax}</div>}
+                                  </div>
+                                  <button style={{ background:"none", border:"none", cursor:"pointer", fontSize:11, color:"var(--text-faint)", padding:"2px 4px" }}
+                                    onClick={() => {
+                                      setHistoryEditKey(editKey);
+                                      setHistoryEditData({ ...r });
+                                    }}>✎</button>
+                                </div>
                               </div>
-                              <div style={{ fontSize:10, color:"var(--text-faint)", marginTop:1 }}>
-                                {r.equipment}{r.handle ? ` · ${r.handle}` : ""}
-                                {r.center && <span style={{ color:"var(--accent-dim)" }}> · {r.center}</span>}
+                            ) : (
+                              /* EDIT MODE */
+                              <div style={{ background:"var(--surface-2, var(--accent-bg))", borderRadius:8, padding:10 }}>
+                                <div style={S.grid2}>
+                                  <div>
+                                    <label style={S.label}>Kg</label>
+                                    <input type="number" style={S.input} value={historyEditData.kg || ""}
+                                      onChange={ev => setHistoryEditData(p => ({...p, kg: ev.target.value}))} />
+                                  </div>
+                                  <div>
+                                    <label style={S.label}>REPS</label>
+                                    <input type="number" style={S.input} value={historyEditData.reps || ""}
+                                      onChange={ev => setHistoryEditData(p => ({...p, reps: ev.target.value}))} />
+                                  </div>
+                                </div>
+                                <div style={{ marginTop:8 }}>
+                                  <label style={S.label}>NOTES</label>
+                                  <input type="text" style={S.input} value={historyEditData.notes || ""}
+                                    onChange={ev => setHistoryEditData(p => ({...p, notes: ev.target.value}))} />
+                                </div>
+                                <div style={{ display:"flex", gap:6, marginTop:8 }}>
+                                  <button style={{...S.btn, flex:1, fontSize:10, padding:"7px"}}
+                                    onClick={() => handleHistorySave(r, historyEditData, editKey)}>
+                                    SAVE
+                                  </button>
+                                  <button style={{...S.btnGhost, fontSize:10, padding:"7px 10px"}}
+                                    onClick={() => { setHistoryEditKey(null); setHistoryEditData(null); }}>
+                                    Cancel
+                                  </button>
+                                </div>
                               </div>
-                            </div>
-                            <div style={{ textAlign:"right", flexShrink:0 }}>
-                              <div style={{ fontSize:13, color:"var(--accent)", fontWeight:600 }}>
-                                {r.kg != null ? r.kg : "—"} kg × {r.reps != null ? r.reps : "—"}
-                              </div>
-                              {r.oneRepMax && <div style={{ fontSize:9, color:"var(--text-faint)" }}>1RM ~{r.oneRepMax}</div>}
-                            </div>
+                            )}
                           </div>
                         );
                       })}
-                      {/* Hurtig-knap: importér dagen til LOG */}
-                      <button
-                        style={{...S.btnGhost, width:"100%", marginTop:10, padding:"8px", fontSize:10, color:"var(--accent)", borderColor:"var(--accent-border)"}}
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          importFromDay(day.date);
-                          setView("log");
-                          setExpandedDay(null);
-                        }}
-                      >
-                        ↓ IMPORTÉR DENNE DAG TIL LOG
-                      </button>
+                      {/* Knapper */}
+                      <div style={{ display:"flex", gap:6, marginTop:10 }}>
+                        <button
+                          style={{...S.btnGhost, flex:1, padding:"8px", fontSize:10, color:"var(--accent)", borderColor:"var(--accent-border)"}}
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            importFromDay(day.date);
+                            setView("log");
+                            setExpandedDay(null);
+                          }}
+                        >
+                          ↓ IMPORT TO LOG
+                        </button>
+                        <button
+                          style={{...S.btnGhost, flex:1, padding:"8px", fontSize:10}}
+                          onClick={() => {
+                            setPlanName(`${toDisplay(day.date)} (imported)`);
+                            setPlanSets(day.records.map(r => ({
+                              id: `p_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+                              exercise: r.exercise || "", equipment: r.equipment || "",
+                              handle: r.handle || "", kg: r.kg ? String(r.kg) : "",
+                              reps: r.reps ? String(r.reps) : "",
+                              repsGoal: r.repsGoal || "", setType: r.setType || "NORMAL SET",
+                              notes: r.notes || "",
+                            })));
+                            setView("create-plan");
+                          }}
+                        >
+                          → SAVE AS PLAN
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2076,6 +2360,7 @@ export default function App() {
 
 // ─── STATS VIEW ───────────────────────────────────────────────────────────────
 function StatsView({ exercise, allRecords, best1RMMap }) {
+  const [showAllEq, setShowAllEq] = React.useState({});
   const records = allRecords.filter(r => r.exercise === exercise && r.oneRepMax);
   const equipment = [...new Set(records.map(r => r.equipment).filter(Boolean))];
 
@@ -2088,21 +2373,17 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
   return (
     <div>
       {equipment.map(eq => {
-        // Filtrér records for dette equipment, og aggregér til bedste 1RM pr. dag
         const allRecs = records.filter(r => r.equipment === eq && r.oneRepMax);
         const bestPerDay = {};
         for (const r of allRecs) {
           const d = r.date;
           if (!d) continue;
-          if (!bestPerDay[d] || r.oneRepMax > bestPerDay[d].oneRepMax) {
-            bestPerDay[d] = r;
-          }
+          if (!bestPerDay[d] || r.oneRepMax > bestPerDay[d].oneRepMax) bestPerDay[d] = r;
         }
         const recs = Object.values(bestPerDay)
-          .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
-          .slice(-30); // sidste 30 træningsdage
+          .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+        const recsForChart = recs.slice(-30);
 
-        // Aggregat: max på tværs af alle handle/center varianter for denne (exercise, equipment)
         const prefix = `${exercise}||${eq}||`;
         let best = null;
         for (const key in best1RMMap) {
@@ -2111,6 +2392,10 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
             if (best == null || v > best) best = v;
           }
         }
+
+        const showAll = showAllEq[eq];
+        const displayRecs = showAll ? [...recs].reverse() : [...recs].reverse().slice(0, 5);
+
         return (
           <div key={eq} style={{ marginBottom:20 }}>
             <div style={{ fontSize:11, color:"var(--accent)", letterSpacing:"0.1em", marginBottom:8 }}>{eq}</div>
@@ -2125,18 +2410,25 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
                 ))}
               </div>
             )}
-            {/* Progression: bedste 1RM pr. dag */}
-            <ProgressChart records={recs} />
-            {/* Seneste 5 dage med højeste 1RM på dagen */}
+            <ProgressChart records={recsForChart} />
+
+            {/* Historik — seneste 5 med fold-ud */}
             <div style={{ marginTop:8 }}>
-              {[...recs].reverse().slice(0, 5).map((r, i) => (
-                <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #161618" }}>
-                  <span style={{ fontSize:10, color:"var(--text-label)" }}>{r.date}</span>
+              {displayRecs.map((r, i) => (
+                <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px solid var(--border-faint)" }}>
+                  <span style={{ fontSize:10, color:"var(--text-label)" }}>{toDisplay(r.date)}</span>
                   <span style={{ fontSize:11, color:"var(--text-secondary)" }}>
                     {r.kg != null ? r.kg : "—"} kg × {r.reps != null ? r.reps : "—"} → <span style={{ color:"var(--accent)" }}>{r.oneRepMax} 1RM</span>
                   </span>
                 </div>
               ))}
+              {recs.length > 5 && (
+                <button
+                  style={{ background:"none", border:"none", cursor:"pointer", width:"100%", padding:"8px 0", fontSize:10, color:"var(--text-dim)", fontFamily:"'DM Mono', monospace", letterSpacing:"0.08em" }}
+                  onClick={() => setShowAllEq(prev => ({ ...prev, [eq]: !prev[eq] }))}>
+                  {showAll ? `▲ SHOW LESS` : `▼ SHOW ALL ${recs.length} SESSIONS`}
+                </button>
+              )}
             </div>
           </div>
         );
@@ -2166,8 +2458,8 @@ function ProgressChart({ records }) {
         <circle key={i} cx={p.x} cy={p.y} r={i === pts.length - 1 ? 3 : 2}
           fill={i === pts.length - 1 ? "var(--accent)" : "var(--text-label)"} />
       ))}
-      <text x={pts[0].x} y={H - 2} textAnchor="middle" fill="var(--text-dim)" fontSize={7} fontFamily="DM Mono, monospace">{pts[0].date?.slice(5)}</text>
-      <text x={pts[pts.length-1].x} y={H - 2} textAnchor="middle" fill="var(--text-dim)" fontSize={7} fontFamily="DM Mono, monospace">{pts[pts.length-1].date?.slice(5)}</text>
+      <text x={pts[0].x} y={H - 2} textAnchor="middle" fill="var(--text-dim)" fontSize={7} fontFamily="DM Mono, monospace">{toDisplay(pts[0].date)?.slice(-5)}</text>
+      <text x={pts[pts.length-1].x} y={H - 2} textAnchor="middle" fill="var(--text-dim)" fontSize={7} fontFamily="DM Mono, monospace">{toDisplay(pts[pts.length-1].date)?.slice(-5)}</text>
     </svg>
   );
 }
