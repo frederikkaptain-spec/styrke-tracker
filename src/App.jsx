@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzq2AXvn-vxkhqBRBT_GMDEFMLZvjbWjounNbNHzRkPzfswXhG0lBuvoGO3mo68NBDj/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwoNYPQkt-UlvMu7YUocFKCbuODFcu4Qj864qksfyVIQm4S9w8bwtQikYPkKURISO8M/exec";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
@@ -80,40 +80,39 @@ async function fetchSetsFromCSV() {
     .filter(r => r.exercise);
 }
 
-// Hent alt data fra Apps Script (sæt, øvelser, redskaber, centre)
+// Hent alt data fra Apps Script (sæt, øvelser, redskaber, centre, handles, plans)
 async function fetchAllData() {
   if (!isAppsScriptConfigured()) {
-    // Fallback: hent kun sæt via CSV, returner tomme lister for resten
     const sets = await fetchSetsFromCSV();
-    return { sets, exercises: [], equipment: [], centers: [] };
+    return { sets, exercises: [], equipment: [], centers: [], handles: [], plans: [] };
   }
   let res;
   try {
     res = await fetch(APPS_SCRIPT_URL, { cache: "no-store", redirect: "follow" });
   } catch (e) {
-    throw new Error(`Netværksfejl: ${e.message || e}`);
+    throw new Error(`Network error: ${e.message || e}`);
   }
   if (!res.ok) throw new Error(`Apps Script HTTP ${res.status}`);
   const text = await res.text();
-  // Apps Script kan returnere HTML (login-side eller redirect) hvis deployment
-  // ikke er sat til "Anyone" eller hvis URL'en peger på en gammel version
   if (text.trim().startsWith("<")) {
-    console.error("Apps Script returnerede HTML — tjekkes nedenfor:", text.slice(0, 500));
-    throw new Error("Apps Script returnerede HTML i stedet for JSON. Tjek at deployment access = 'Anyone' og at scriptet er redeployet med nyeste kode.");
+    console.error("Apps Script returned HTML — first 500:", text.slice(0, 500));
+    throw new Error("Apps Script returned HTML instead of JSON. Check that deployment access = 'Anyone' and that the script is redeployed.");
   }
   let json;
   try {
     json = JSON.parse(text);
   } catch (e) {
-    console.error("JSON-parse fejl. Raw response:", text.slice(0, 500));
-    throw new Error(`Apps Script returnerede ugyldig JSON: ${text.slice(0, 100)}`);
+    console.error("JSON parse failed. Raw response:", text.slice(0, 500));
+    throw new Error(`Apps Script returned invalid JSON: ${text.slice(0, 100)}`);
   }
-  if (json.error) throw new Error(`Apps Script fejl: ${json.error}`);
+  if (json.error) throw new Error(`Apps Script error: ${json.error}`);
   return {
     sets: Array.isArray(json.sets) ? json.sets : [],
     exercises: Array.isArray(json.exercises) ? json.exercises : [],
     equipment: Array.isArray(json.equipment) ? json.equipment : [],
     centers: Array.isArray(json.centers) ? json.centers : [],
+    handles: Array.isArray(json.handles) ? json.handles : [],
+    plans: Array.isArray(json.plans) ? json.plans : [],
   };
 }
 
@@ -162,6 +161,23 @@ async function saveExerciseToSheet(exercise) {
     primaryMuscle: exercise.primaryMuscle || "",
     secondaryMuscles: exercise.secondaryMuscles || "",
     equipment: exercise.equipment || "",
+    defaultRepRange: exercise.defaultRepRange || "",
+  });
+}
+
+async function updateExerciseRepRange(name, defaultRepRange) {
+  return postToAppsScript({
+    type: "exercise_update_rep_range",
+    name,
+    defaultRepRange,
+  });
+}
+
+async function saveHandleToSheet(handle) {
+  return postToAppsScript({
+    type: "handle",
+    name: handle.name,
+    equipment: handle.equipment || "",
   });
 }
 
@@ -210,16 +226,16 @@ const REP_RANGES = ["1-3","3-5","4-5","5","5-8","6-8","8-10","8-12","10-12","10-
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const S = {
   app: {
-    minHeight:"100vh", background:"#0d0d10", color:"#e4e4dc",
+    minHeight:"100vh", background:"var(--bg)", color:"var(--text-primary)",
     fontFamily:"'DM Mono', monospace", maxWidth:480, margin:"0 auto",
     paddingBottom:80,
   },
   header: {
-    padding:"16px 16px 0", borderBottom:"1px solid #1a1a1e",
-    background:"#0d0d10", position:"sticky", top:0, zIndex:10,
+    padding:"16px 16px 0", borderBottom:"1px solid var(--border-subtle)",
+    background:"var(--bg)", position:"sticky", top:0, zIndex:10,
   },
   title: {
-    fontSize:11, letterSpacing:"0.2em", color:"#b8e840", fontWeight:600,
+    fontSize:11, letterSpacing:"0.2em", color:"var(--accent)", fontWeight:600,
     textTransform:"uppercase", marginBottom:12,
   },
   nav: {
@@ -229,73 +245,73 @@ const S = {
     flex:"none", padding:"8px 14px", fontSize:10, letterSpacing:"0.15em",
     fontFamily:"'DM Mono', monospace", border:"none", borderRadius:0,
     background:"none", cursor:"pointer", fontWeight:600,
-    color: active ? "#b8e840" : "#444",
-    borderBottom: active ? "2px solid #b8e840" : "2px solid transparent",
+    color: active ? "var(--accent)" : "var(--text-faint)",
+    borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
     transition:"all 0.15s",
   }),
   page: { padding:"16px" },
   card: {
-    background:"#111114", border:"1px solid #1c1c20", borderRadius:10,
+    background:"var(--card)", border:"1px solid var(--border)", borderRadius:10,
     padding:14, marginBottom:10,
   },
   label: {
-    fontSize:9, letterSpacing:"0.15em", color:"#555", textTransform:"uppercase",
+    fontSize:9, letterSpacing:"0.15em", color:"var(--text-label)", textTransform:"uppercase",
     display:"block", marginBottom:4,
   },
   input: {
-    width:"100%", background:"#0d0d10", border:"1px solid #252528",
-    borderRadius:6, padding:"8px 10px", color:"#e4e4dc",
+    width:"100%", background:"var(--bg)", border:"1px solid var(--border-input)",
+    borderRadius:6, padding:"8px 10px", color:"var(--text-primary)",
     fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box",
     outline:"none",
   },
   select: {
-    width:"100%", background:"#0d0d10", border:"1px solid #252528",
-    borderRadius:6, padding:"8px 10px", color:"#e4e4dc",
+    width:"100%", background:"var(--bg)", border:"1px solid var(--border-input)",
+    borderRadius:6, padding:"8px 10px", color:"var(--text-primary)",
     fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box",
   },
   btn: {
-    background:"#b8e840", color:"#0d0d10", border:"none", borderRadius:6,
+    background:"var(--accent)", color:"var(--bg)", border:"none", borderRadius:6,
     padding:"10px 16px", fontSize:11, letterSpacing:"0.1em", fontWeight:700,
     cursor:"pointer", fontFamily:"'DM Mono', monospace",
   },
   btnGhost: {
-    background:"none", color:"#666", border:"1px solid #252528", borderRadius:6,
+    background:"none", color:"var(--text-dim)", border:"1px solid var(--border-input)", borderRadius:6,
     padding:"8px 12px", fontSize:10, letterSpacing:"0.1em",
     cursor:"pointer", fontFamily:"'DM Mono', monospace",
   },
   grid2: { display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 },
   tag: {
     display:"inline-block", fontSize:9, padding:"3px 7px",
-    background:"#1c1c20", borderRadius:4, color:"#888",
+    background:"var(--border)", borderRadius:4, color:"var(--text-muted)",
     letterSpacing:"0.08em",
   },
   tagGreen: {
     display:"inline-block", fontSize:9, padding:"3px 7px",
-    background:"#1a2a00", borderRadius:4, color:"#b8e840",
+    background:"var(--accent-bg-mid)", borderRadius:4, color:"var(--accent)",
     letterSpacing:"0.08em",
   },
   orm: {
-    background:"#0c1800", border:"1px solid #1a2e00", borderRadius:8,
+    background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:8,
     padding:"10px 12px", marginTop:8,
   },
-  ormTitle: { fontSize:9, color:"#4a6a00", letterSpacing:"0.12em", marginBottom:6 },
+  ormTitle: { fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.12em", marginBottom:6 },
   ormRow: { display:"flex", justifyContent:"space-between", marginBottom:3 },
-  ormLabel: { fontSize:10, color:"#555" },
-  ormValue: { fontSize:11, color:"#b8e840", fontWeight:600 },
+  ormLabel: { fontSize:10, color:"var(--text-label)" },
+  ormValue: { fontSize:11, color:"var(--accent)", fontWeight:600 },
   section: { marginBottom:16 },
   sectionTitle: {
-    fontSize:9, letterSpacing:"0.2em", color:"#444", textTransform:"uppercase",
-    marginBottom:8, borderBottom:"1px solid #1a1a1e", paddingBottom:6,
+    fontSize:9, letterSpacing:"0.2em", color:"var(--text-faint)", textTransform:"uppercase",
+    marginBottom:8, borderBottom:"1px solid var(--border-subtle)", paddingBottom:6,
   },
   toast: {
     position:"fixed", bottom:90, left:"50%", transform:"translateX(-50%)",
-    background:"#b8e840", color:"#0d0d10", padding:"10px 20px",
+    background:"var(--accent)", color:"var(--bg)", padding:"10px 20px",
     borderRadius:8, fontSize:11, fontWeight:700, letterSpacing:"0.1em",
     zIndex:50, whiteSpace:"nowrap",
   },
   toastErr: {
     position:"fixed", bottom:90, left:"50%", transform:"translateX(-50%)",
-    background:"#3d0000", color:"#ff6b6b", padding:"10px 20px", border:"1px solid #600",
+    background:"var(--error-bg)", color:"var(--error)", padding:"10px 20px", border:"1px solid var(--error-border)",
     borderRadius:8, fontSize:11, fontWeight:700, letterSpacing:"0.1em",
     zIndex:50, whiteSpace:"nowrap",
   },
@@ -307,11 +323,31 @@ export default function App() {
   const [localData, setLocalData] = useState([]);
   const [toast, setToast] = useState(null); // { msg, ok }
 
+  // ── Theme toggle ──
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem('st-theme');
+    if (saved) return saved;
+    return prefersDark ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.remove('light', 'dark');
+    document.documentElement.classList.add(theme);
+    localStorage.setItem('st-theme', theme);
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme(t => t === 'dark' ? 'light' : 'dark');
+  }, []);
+
   // ── Google Sheets data ──
   const [sheetData, setSheetData] = useState([]);
-  const [sheetExercises, setSheetExercises] = useState([]); // [{name, primaryMuscle, secondaryMuscles, equipment}]
+  const [sheetExercises, setSheetExercises] = useState([]); // [{name, primaryMuscle, secondaryMuscles, equipment, defaultRepRange}]
   const [sheetEquipment, setSheetEquipment] = useState([]); // [{name}]
   const [sheetCenters, setSheetCenters] = useState([]); // [{name}]
+  const [sheetHandles, setSheetHandles] = useState([]); // [{name, equipment}]
+  const [sheetPlans, setSheetPlans] = useState([]); // [{name, sets:[{exercise, equipment, handle, kg, reps, repsGoal, setType, notes, order}]}]
   const [sheetLoading, setSheetLoading] = useState(true);
   const [sheetError, setSheetError] = useState(null);
 
@@ -359,6 +395,7 @@ export default function App() {
   const [newExPrimary, setNewExPrimary] = useState("");
   const [newExSecondary, setNewExSecondary] = useState("");
   const [newExEquipment, setNewExEquipment] = useState("");
+  const [newExRepRange, setNewExRepRange] = useState("8-10");
   const [savingEx, setSavingEx] = useState(false);
 
   // REDSKABER state
@@ -373,6 +410,165 @@ export default function App() {
   const [showAddGym, setShowAddGym] = useState(false);
   const [newGymName, setNewGymName] = useState("");
   const [savingGym, setSavingGym] = useState(false);
+
+  // HANDLES (under equipment) state
+  const [showAddHandle, setShowAddHandle] = useState(null);
+  const [newHandleName, setNewHandleName] = useState("");
+  const [savingHandle, setSavingHandle] = useState(false);
+
+  const handleAddHandle = useCallback(async (equipmentName) => {
+    const name = newHandleName.trim().toUpperCase();
+    if (!name) return;
+    setSavingHandle(true);
+    const ok = await saveHandleToSheet({ name, equipment: equipmentName });
+    if (ok) {
+      setSheetHandles(prev => {
+        if (prev.some(h => h.name === name && h.equipment === equipmentName)) return prev;
+        return [...prev, { name, equipment: equipmentName }];
+      });
+      setNewHandleName("");
+      setShowAddHandle(null);
+      showToast(`Handle "${name}" added ✓`, true);
+    } else {
+      showToast("Could not save handle", false);
+    }
+    setSavingHandle(false);
+  }, [newHandleName]);
+
+  // WORKOUT PLAN state
+  const [planSearch, setPlanSearch] = useState("");
+  const [expandedPlan, setExpandedPlan] = useState(null);
+  const [planName, setPlanName] = useState("");
+  const [planSets, setPlanSets] = useState([{
+    id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    exercise: "", equipment: "", handle: "",
+    kg: "", reps: "",
+    repsGoal: "8-10", setType: "NORMAL SET", notes: "",
+  }]);
+  const [savingPlan, setSavingPlan] = useState(false);
+
+  const newPlanSetId = () => `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const updatePlanSet = useCallback((id, updates) => {
+    setPlanSets(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
+  }, []);
+  const removePlanSet = useCallback((id) => {
+    setPlanSets(prev => prev.length > 1 ? prev.filter(s => s.id !== id) : prev);
+  }, []);
+  const addPlanSet = useCallback(() => {
+    setPlanSets(prev => {
+      const last = prev[prev.length - 1];
+      return [...prev, {
+        id: newPlanSetId(),
+        exercise: last?.exercise || "",
+        equipment: last?.equipment || "",
+        handle: last?.handle || "",
+        kg: "", reps: "",
+        repsGoal: last?.repsGoal || "8-10",
+        setType: last?.setType || "NORMAL SET",
+        notes: "",
+      }];
+    });
+  }, []);
+
+  const handleSavePlan = useCallback(async () => {
+    const name = planName.trim();
+    if (!name) {
+      showToast("Plan needs a name", false);
+      return;
+    }
+    const validSets = planSets.filter(s => s.exercise);
+    if (!validSets.length) {
+      showToast("Plan needs at least one set", false);
+      return;
+    }
+    setSavingPlan(true);
+    // Send plan as JSON
+    const ok = await postToAppsScript({
+      type: "plan_save",
+      name,
+      sets: validSets.map((s, i) => ({
+        order: i + 1,
+        exercise: s.exercise,
+        equipment: s.equipment,
+        handle: s.handle || "",
+        kg: s.kg || "",
+        reps: s.reps || "",
+        repsGoal: s.repsGoal || "",
+        setType: s.setType || "NORMAL SET",
+        notes: s.notes || "",
+      })),
+    });
+    if (ok) {
+      setSheetPlans(prev => {
+        const filtered = prev.filter(p => p.name !== name);
+        return [...filtered, { name, sets: validSets.map((s, i) => ({
+          order: i + 1,
+          exercise: s.exercise,
+          equipment: s.equipment,
+          handle: s.handle || "",
+          kg: s.kg || "",
+          reps: s.reps || "",
+          repsGoal: s.repsGoal || "",
+          setType: s.setType || "NORMAL SET",
+          notes: s.notes || "",
+        })) }];
+      });
+      setPlanName("");
+      setPlanSets([{
+        id: newPlanSetId(),
+        exercise: "", equipment: "", handle: "",
+        kg: "", reps: "",
+        repsGoal: "8-10", setType: "NORMAL SET", notes: "",
+      }]);
+      showToast(`Plan "${name}" saved ✓`, true);
+      setView("existing-plans");
+    } else {
+      showToast("Could not save plan", false);
+    }
+    setSavingPlan(false);
+  }, [planName, planSets]);
+
+  const handleDeletePlan = useCallback(async (name) => {
+    if (!confirm(`Delete plan "${name}"?`)) return;
+    const ok = await postToAppsScript({ type: "plan_delete", name });
+    if (ok) {
+      setSheetPlans(prev => prev.filter(p => p.name !== name));
+      showToast(`Plan "${name}" deleted`, true);
+    } else {
+      showToast("Could not delete plan", false);
+    }
+  }, []);
+
+  // Import plan into LOG
+  const importPlan = useCallback((planName) => {
+    const plan = sheetPlans.find(p => p.name === planName);
+    if (!plan || !plan.sets || !plan.sets.length) return;
+    const imported = plan.sets
+      .sort((a, b) => (a.order || 0) - (b.order || 0))
+      .map(s => ({
+        id: `s_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        exercise: s.exercise || "",
+        equipment: s.equipment || "",
+        handle: s.handle || "",
+        kg: s.kg != null ? String(s.kg) : "",
+        reps: s.reps != null ? String(s.reps) : "",
+        repsGoal: s.repsGoal || "8-10",
+        setType: s.setType || "NORMAL SET",
+        notes: s.notes || "",
+        collapsed: true,
+      }));
+    setEntries(prev => {
+      const isOnlyBlank = prev.length === 1 && !prev[0].exercise && !prev[0].kg && !prev[0].reps;
+      if (isOnlyBlank) return imported;
+      const collapsedExisting = prev.map(e => ({ ...e, collapsed: true }));
+      return [...collapsedExisting, ...imported];
+    });
+    setShowImportPlan(false);
+    showToast(`Plan "${planName}" loaded — adjust kg/reps`, true);
+  }, [sheetPlans]);
+
+  const [showImportPlan, setShowImportPlan] = useState(false);
+  const [importPlanName, setImportPlanName] = useState("");
 
   // HISTORIK state
   const [histEx, setHistEx] = useState("");
@@ -405,17 +601,19 @@ export default function App() {
     let cancelled = false;
     setSheetLoading(true);
     fetchAllData()
-      .then(({ sets, exercises, equipment, centers }) => {
+      .then(({ sets, exercises, equipment, centers, handles, plans }) => {
         if (cancelled) return;
         setSheetData(sets);
         setSheetExercises(exercises);
         setSheetEquipment(equipment);
         setSheetCenters(centers || []);
+        setSheetHandles(handles || []);
+        setSheetPlans(plans || []);
         setSheetError(null);
       })
       .catch(err => {
         if (cancelled) return;
-        console.error("Sheet fetch fejlede:", err);
+        console.error("Sheet fetch failed:", err);
         setSheetError(err.message || "Could not load data from Google Sheets");
       })
       .finally(() => { if (!cancelled) setSheetLoading(false); });
@@ -426,16 +624,18 @@ export default function App() {
   const refreshSheet = useCallback(async () => {
     setSheetLoading(true);
     try {
-      const { sets, exercises, equipment, centers } = await fetchAllData();
+      const { sets, exercises, equipment, centers, handles, plans } = await fetchAllData();
       setSheetData(sets);
       setSheetExercises(exercises);
       setSheetEquipment(equipment);
       setSheetCenters(centers || []);
+      setSheetHandles(handles || []);
+      setSheetPlans(plans || []);
       setSheetError(null);
       showToast(`${sets.length} sets loaded ✓`, true);
     } catch (err) {
       console.error(err);
-      setSheetError(err.message || "Fejl");
+      setSheetError(err.message || "Error");
       showToast("Could not load from Sheets", false);
     } finally {
       setSheetLoading(false);
@@ -452,9 +652,9 @@ export default function App() {
       primaryMuscle: newExPrimary.trim(),
       secondaryMuscles: newExSecondary.trim(),
       equipment: newExEquipment.trim(),
+      defaultRepRange: newExRepRange,
     });
     if (ok) {
-      // Opdater lokalt så det vises straks
       setSheetExercises(prev => {
         if (prev.some(e => e.name.toLowerCase() === name.toLowerCase())) return prev;
         return [...prev, {
@@ -462,20 +662,33 @@ export default function App() {
           primaryMuscle: newExPrimary.trim(),
           secondaryMuscles: newExSecondary.trim(),
           equipment: newExEquipment.trim(),
+          defaultRepRange: newExRepRange,
         }];
       });
-      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment("");
+      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepRange("8-10");
       setShowAddEx(false);
       showToast(`"${name}" added ✓`, true);
     } else {
-      // Fallback: gem lokalt så brugeren ikke mister det
       setCustomExercises(p => [...p, name]);
-      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment("");
+      setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepRange("8-10");
       setShowAddEx(false);
       showToast("Could not save to Sheets — local only", false);
     }
     setSavingEx(false);
-  }, [newExName, newExPrimary, newExSecondary, newExEquipment]);
+  }, [newExName, newExPrimary, newExSecondary, newExEquipment, newExRepRange]);
+
+  // Update default rep range for an existing exercise
+  const handleUpdateRepRange = useCallback(async (exName, newRange) => {
+    const ok = await updateExerciseRepRange(exName, newRange);
+    if (ok) {
+      setSheetExercises(prev => prev.map(e =>
+        e.name === exName ? { ...e, defaultRepRange: newRange } : e
+      ));
+      showToast(`Rep range updated for ${exName}`, true);
+    } else {
+      showToast("Could not update rep range", false);
+    }
+  }, []);
 
   // ── Tilføj nyt redskab (gemmes i Sheets) ──
   const handleAddEquipment = useCallback(async () => {
@@ -585,7 +798,25 @@ export default function App() {
     return [...new Set([...ALL_EQUIPMENT, ...fromSheet, ...fromData])].sort();
   }, [allRecords, sheetEquipment]);
 
-  // Map øvelsesnavn → muskelgruppe-info og redskaber (fra Øvelser-arket)
+  // Få handles for et specifikt redskab — merger sheet + hardcoded fallback
+  const getHandlesForEquipment = useCallback((equipmentName) => {
+    if (!equipmentName) return [];
+    const fromSheet = sheetHandles
+      .filter(h => !h.equipment || h.equipment === equipmentName)
+      .map(h => h.name)
+      .filter(Boolean);
+    // For CABLE TOWER: merger med default handles hvis sheet er tomt
+    if (equipmentName === "CABLE TOWER" && fromSheet.length === 0) {
+      return [...HANDLES];
+    }
+    // Find også handles der er brugt i historik for dette equipment
+    const fromHistory = [...new Set(
+      allRecords.filter(r => r.equipment === equipmentName && r.handle).map(r => r.handle)
+    )];
+    return [...new Set([...fromSheet, ...fromHistory])].sort();
+  }, [sheetHandles, allRecords]);
+
+  // Map øvelsesnavn → muskelgruppe-info, redskaber og default rep range (fra Øvelser-arket)
   const exerciseMuscleMap = useMemo(() => {
     const map = {};
     for (const e of sheetExercises) {
@@ -593,6 +824,7 @@ export default function App() {
         primaryMuscle: e.primaryMuscle || "",
         secondaryMuscles: e.secondaryMuscles || "",
         equipment: e.equipment || "",
+        defaultRepRange: e.defaultRepRange || "",
       };
     }
     return map;
@@ -763,35 +995,57 @@ export default function App() {
       <div style={S.header}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
           <div style={{...S.title, marginBottom:0}}>⚡ STYRKE TRACKER</div>
-          <button
-            onClick={refreshSheet}
-            disabled={sheetLoading}
-            title={sheetError ? `Error: ${sheetError}` : `${sheetData.length} sets loaded from Sheets`}
-            style={{
-              background:"none", border:"none", cursor:"pointer",
-              fontSize:9, letterSpacing:"0.1em",
-              color: sheetError ? "#ff6b6b" : sheetLoading ? "#666" : "#4a6a00",
-              fontFamily:"'DM Mono', monospace",
-              padding:"4px 8px",
-              opacity: sheetLoading ? 0.6 : 1,
-            }}
-          >
-            {sheetLoading
-              ? "↻ LOADING..."
-              : sheetError
-                ? "⚠ ERROR · TRY AGAIN"
-                : `↻ ${sheetData.length} SÆT`}
-          </button>
+          <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+            {/* Theme toggle */}
+            <button
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              style={{
+                background:"none", border:"1px solid var(--border-input)",
+                borderRadius:6, cursor:"pointer", padding:"3px 7px",
+                fontSize:12, lineHeight:1, color:"var(--text-dim)",
+              }}
+            >
+              {theme === 'dark' ? '☀' : '🌙'}
+            </button>
+            <button
+              onClick={refreshSheet}
+              disabled={sheetLoading}
+              title={sheetError ? `Error: ${sheetError}` : `${sheetData.length} sets loaded from Sheets`}
+              style={{
+                background:"none", border:"none", cursor:"pointer",
+                fontSize:9, letterSpacing:"0.1em",
+                color: sheetError ? "var(--error)" : sheetLoading ? "var(--text-dim)" : "var(--accent-dim)",
+                fontFamily:"'DM Mono', monospace",
+                padding:"4px 8px",
+                opacity: sheetLoading ? 0.6 : 1,
+              }}
+            >
+              {sheetLoading
+                ? "↻ LOADING..."
+                : sheetError
+                  ? "⚠ ERROR · TRY AGAIN"
+                  : `↻ ${sheetData.length} SÆT`}
+            </button>
+          </div>
         </div>
         <div style={S.nav}>
-          {[["log","LOG"],["resources","RESOURCES"],["history","HISTORY"],["insights","INSIGHTS"]].map(([k,l]) => (
-            <button key={k} style={S.navBtn(view===k || (k==="resources" && ["exercises","equipment","gyms"].includes(view)))} onClick={() => setView(k === "resources" ? "exercises" : k)}>{l}</button>
+          {[["log","LOG"],["resources","RESOURCES"],["plans","WORKOUT PLAN"],["history","HISTORY"],["insights","INSIGHTS"]].map(([k,l]) => (
+            <button key={k} style={S.navBtn(view===k || (k==="resources" && ["exercises","equipment","gyms"].includes(view)) || (k==="plans" && ["existing-plans","create-plan"].includes(view)))} onClick={() => setView(k === "resources" ? "exercises" : k === "plans" ? "existing-plans" : k)}>{l}</button>
           ))}
         </div>
         {/* Sub-nav for RESOURCES */}
         {["exercises","equipment","gyms"].includes(view) && (
-          <div style={{...S.nav, marginTop:8, paddingLeft:8, borderLeft:"2px solid #1a2e00"}}>
+          <div style={{...S.nav, marginTop:8, paddingLeft:8, borderLeft:"2px solid var(--accent-border)"}}>
             {[["exercises","EXERCISES"],["equipment","EQUIPMENT"],["gyms","GYMS"]].map(([k,l]) => (
+              <button key={k} style={{...S.navBtn(view===k), fontSize:10}} onClick={() => setView(k)}>{l}</button>
+            ))}
+          </div>
+        )}
+        {/* Sub-nav for WORKOUT PLAN */}
+        {["existing-plans","create-plan"].includes(view) && (
+          <div style={{...S.nav, marginTop:8, paddingLeft:8, borderLeft:"2px solid var(--accent-border)"}}>
+            {[["existing-plans","EXISTING PLANS"],["create-plan","CREATE PLAN"]].map(([k,l]) => (
               <button key={k} style={{...S.navBtn(view===k), fontSize:10}} onClick={() => setView(k)}>{l}</button>
             ))}
           </div>
@@ -801,13 +1055,13 @@ export default function App() {
       {/* Fejl-banner — vises under header når data ikke kan hentes */}
       {sheetError && (
         <div style={{
-          background:"#2a0a0a", border:"1px solid #5a1a1a", borderRadius:6,
+          background:"var(--error-bg)", border:"1px solid var(--error-border)", borderRadius:6,
           padding:"10px 12px", margin:"0 0 12px 0",
-          fontSize:11, color:"#ff9999", lineHeight:1.5,
+          fontSize:11, color:"var(--error-light)", lineHeight:1.5,
         }}>
-          <div style={{ fontWeight:600, marginBottom:4, color:"#ff6b6b" }}>Could not load data from Google Sheets</div>
-          <div style={{ fontSize:10, color:"#cc8888" }}>{sheetError}</div>
-          <div style={{ fontSize:9, color:"#774444", marginTop:6, letterSpacing:"0.05em" }}>
+          <div style={{ fontWeight:600, marginBottom:4, color:"var(--error)" }}>Could not load data from Google Sheets</div>
+          <div style={{ fontSize:10, color:"var(--error-muted)" }}>{sheetError}</div>
+          <div style={{ fontSize:9, color:"var(--error-dim)", marginTop:6, letterSpacing:"0.05em" }}>
             Check that Apps Script is deployed with "Anyone" access and that the URL in App.jsx is correct.
           </div>
         </div>
@@ -842,50 +1096,91 @@ export default function App() {
             </div>
           </div>
 
-          {/* Importér tidligere træning */}
-          <div style={{ marginBottom:10 }}>
+          {/* Import: tidligere session eller plan */}
+          <div style={{ display:"flex", gap:8, marginBottom:10 }}>
             <button
               style={{
                 ...S.btnGhost,
-                width:"100%",
+                flex:1,
                 padding:"10px",
                 fontSize:10,
-                letterSpacing:"0.12em",
-                color: showImport ? "#b8e840" : "#888",
-                borderColor: showImport ? "#1a2e00" : "#252528",
+                letterSpacing:"0.1em",
+                color: showImport ? "var(--accent)" : "var(--text-muted)",
+                borderColor: showImport ? "var(--accent-border)" : "var(--border-input)",
               }}
-              onClick={() => setShowImport(s => !s)}
+              onClick={() => { setShowImport(s => !s); setShowImportPlan(false); }}
             >
-              {showImport ? "▲ CLOSE" : "↓ IMPORT EARLIER SESSION"}
+              {showImport ? "▲ CLOSE" : "↓ IMPORT SESSION"}
             </button>
-            {showImport && (
-              <div style={{...S.card, marginTop:8, marginBottom:0}}>
-                <label style={S.label}>CHOOSE EARLIER SESSION</label>
-                <select
-                  style={S.select}
-                  value={importDay}
-                  onChange={e => setImportDay(e.target.value)}
-                >
-                  <option value="">— CHOOSE DAY —</option>
-                  {daysGrouped.map(d => (
-                    <option key={d.date} value={d.date}>
-                      {d.date} · {d.records.length} sets · {d.exercises.slice(0, 3).join(", ")}{d.exercises.length > 3 ? "…" : ""}
-                    </option>
-                  ))}
-                </select>
-                <div style={{ fontSize:9, color:"#444", marginTop:8, letterSpacing:"0.05em", lineHeight:1.5 }}>
-                  Copies all sets from the chosen day into the log. Date is set to {sessionDate}. Adjust kg/reps as you do them today.
-                </div>
-                <button
-                  style={{...S.btn, width:"100%", marginTop:10, opacity: importDay ? 1 : 0.4}}
-                  onClick={() => importFromDay(importDay)}
-                  disabled={!importDay}
-                >
-                  IMPORTÉR →
-                </button>
-              </div>
-            )}
+            <button
+              style={{
+                ...S.btnGhost,
+                flex:1,
+                padding:"10px",
+                fontSize:10,
+                letterSpacing:"0.1em",
+                color: showImportPlan ? "var(--accent)" : "var(--text-muted)",
+                borderColor: showImportPlan ? "var(--accent-border)" : "var(--border-input)",
+              }}
+              onClick={() => { setShowImportPlan(s => !s); setShowImport(false); }}
+            >
+              {showImportPlan ? "▲ CLOSE" : "↓ IMPORT PLAN"}
+            </button>
           </div>
+          {showImport && (
+            <div style={{...S.card, marginBottom:10}}>
+              <label style={S.label}>CHOOSE EARLIER SESSION</label>
+              <select
+                style={S.select}
+                value={importDay}
+                onChange={e => setImportDay(e.target.value)}
+              >
+                <option value="">— CHOOSE DAY —</option>
+                {daysGrouped.map(d => (
+                  <option key={d.date} value={d.date}>
+                    {d.date} · {d.records.length} sets · {d.exercises.slice(0, 3).join(", ")}{d.exercises.length > 3 ? "…" : ""}
+                  </option>
+                ))}
+              </select>
+              <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:8, letterSpacing:"0.05em", lineHeight:1.5 }}>
+                Copies all sets from the chosen day into the log. Date is set to {sessionDate}. Adjust kg/reps as you do them today.
+              </div>
+              <button
+                style={{...S.btn, width:"100%", marginTop:10, opacity: importDay ? 1 : 0.4}}
+                onClick={() => importFromDay(importDay)}
+                disabled={!importDay}
+              >
+                IMPORT →
+              </button>
+            </div>
+          )}
+          {showImportPlan && (
+            <div style={{...S.card, marginBottom:10}}>
+              <label style={S.label}>CHOOSE PLAN</label>
+              <select
+                style={S.select}
+                value={importPlanName}
+                onChange={e => setImportPlanName(e.target.value)}
+              >
+                <option value="">— CHOOSE PLAN —</option>
+                {sheetPlans.map(p => (
+                  <option key={p.name} value={p.name}>
+                    {p.name} · {p.sets ? p.sets.length : 0} sets
+                  </option>
+                ))}
+              </select>
+              <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:8, letterSpacing:"0.05em", lineHeight:1.5 }}>
+                Loads all sets from the plan as templates. Adjust kg/reps to what you actually do.
+              </div>
+              <button
+                style={{...S.btn, width:"100%", marginTop:10, opacity: importPlanName ? 1 : 0.4}}
+                onClick={() => importPlan(importPlanName)}
+                disabled={!importPlanName}
+              >
+                IMPORT →
+              </button>
+            </div>
+          )}
 
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
             <div style={{...S.sectionTitle, marginBottom:0, border:"none", padding:0}}>
@@ -923,8 +1218,8 @@ export default function App() {
                 >
                   <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0, flex:1 }}>
                     <span style={{
-                      fontSize:9, color:"#b8e840", letterSpacing:"0.15em",
-                      background:"#1a2a00", padding:"3px 7px", borderRadius:4, fontWeight:600,
+                      fontSize:9, color:"var(--accent)", letterSpacing:"0.15em",
+                      background:"var(--accent-bg-mid)", padding:"3px 7px", borderRadius:4, fontWeight:600,
                       flexShrink:0,
                     }}>
                       SÆT {idx + 1}
@@ -934,26 +1229,26 @@ export default function App() {
                       <div style={{ minWidth:0, flex:1, overflow:"hidden" }}>
                         {isComplete ? (
                           <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:11 }}>
-                            <span style={{ color:"#e4e4dc", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                            <span style={{ color:"var(--text-primary)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
                               {e.exercise}
                             </span>
-                            <span style={{ color:"#b8e840", fontWeight:600, whiteSpace:"nowrap" }}>
+                            <span style={{ color:"var(--accent)", fontWeight:600, whiteSpace:"nowrap" }}>
                               {e.kg}×{e.reps}
                             </span>
                             {eLiveOrm && (
-                              <span style={{ color:"#444", fontSize:10, whiteSpace:"nowrap" }}>
+                              <span style={{ color:"var(--text-faint)", fontSize:10, whiteSpace:"nowrap" }}>
                                 1RM ~{eLiveOrm}
                               </span>
                             )}
                           </div>
                         ) : (
-                          <div style={{ fontSize:11, color:"#555", fontStyle:"italic" }}>
+                          <div style={{ fontSize:11, color:"var(--text-label)", fontStyle:"italic" }}>
                             Not filled
                           </div>
                         )}
                       </div>
                     ) : (
-                      <div style={{ fontSize:11, color:"#666" }}>
+                      <div style={{ fontSize:11, color:"var(--text-dim)" }}>
                         {isComplete ? "Udfyldt" : "Udfyld felter ↓"}
                       </div>
                     )}
@@ -963,7 +1258,7 @@ export default function App() {
                       <button
                         onClick={(ev) => { ev.stopPropagation(); removeSet(e.id); }}
                         style={{
-                          background:"none", border:"none", color:"#555",
+                          background:"none", border:"none", color:"var(--text-label)",
                           fontSize:16, cursor:"pointer", padding:"0 4px", lineHeight:1,
                           fontFamily:"'DM Mono', monospace",
                         }}
@@ -971,7 +1266,7 @@ export default function App() {
                         title="Remove set"
                       >×</button>
                     )}
-                    <span style={{ color:"#444", fontSize:11 }}>{e.collapsed ? "▼" : "▲"}</span>
+                    <span style={{ color:"var(--text-faint)", fontSize:11 }}>{e.collapsed ? "▼" : "▲"}</span>
                   </div>
                 </div>
 
@@ -981,7 +1276,18 @@ export default function App() {
                     <div style={{ marginBottom:10 }}>
                       <label style={S.label}>EXERCISE</label>
                       <select style={S.select} value={e.exercise}
-                        onChange={ev => updateEntry(e.id, { exercise: ev.target.value, equipment: "", handle: "" })}>
+                        onChange={ev => {
+                          const newEx = ev.target.value;
+                          const meta = exerciseMuscleMap[newEx];
+                          updateEntry(e.id, {
+                            exercise: newEx,
+                            equipment: "",
+                            handle: "",
+                            // Overskriv kun repsGoal hvis sættet bruger en øvelses-default
+                            // (dvs. ikke fra plan eller import)
+                            repsGoal: (meta && meta.defaultRepRange) || e.repsGoal || "8-10",
+                          });
+                        }}>
                         <option value="">— CHOOSE EXERCISE —</option>
                         {allExercises.map(ex => <option key={ex}>{ex}</option>)}
                       </select>
@@ -1007,7 +1313,7 @@ export default function App() {
                         <select style={S.select} value={e.handle || ""}
                           onChange={ev => updateEntry(e.id, { handle: ev.target.value })}>
                           <option value="">— CHOOSE HANDLE —</option>
-                          {HANDLES.map(h => <option key={h}>{h}</option>)}
+                          {getHandlesForEquipment("CABLE TOWER").map(h => <option key={h}>{h}</option>)}
                         </select>
                       </div>
                     )}
@@ -1022,7 +1328,7 @@ export default function App() {
                             <span style={S.ormValue}>{Math.round(eBestOrm * pct / 100 * 2) / 2} kg</span>
                           </div>
                         ))}
-                        <div style={{...S.ormRow, marginTop:6, borderTop:"1px solid #1a2e00", paddingTop:6}}>
+                        <div style={{...S.ormRow, marginTop:6, borderTop:"1px solid var(--accent-border)", paddingTop:6}}>
                           <span style={S.ormLabel}>Best 1RM</span>
                           <span style={{...S.ormValue, fontSize:13}}>{eBestOrm} kg</span>
                         </div>
@@ -1043,26 +1349,26 @@ export default function App() {
                     </div>
 
                     {eLiveOrm && (
-                      <div style={{ fontSize:10, color:"#b8e840", textAlign:"right", marginBottom:8, letterSpacing:"0.08em" }}>
+                      <div style={{ fontSize:10, color:"var(--accent)", textAlign:"right", marginBottom:8, letterSpacing:"0.08em" }}>
                         Est. 1RM: <strong>{eLiveOrm} kg</strong>
                       </div>
                     )}
 
-                    <div style={{...S.grid2, marginBottom:10}}>
-                      <div>
-                        <label style={S.label}>REP RANGE</label>
-                        <select style={S.select} value={e.repsGoal}
-                          onChange={ev => updateEntry(e.id, { repsGoal: ev.target.value })}>
-                          {REP_RANGES.map(r => <option key={r}>{r}</option>)}
-                        </select>
+                    {/* REP RANGE er read-only her — defineret pr. øvelse i EXERCISE-fanen, eller pr. sæt i workout plan */}
+                    {e.repsGoal && (
+                      <div style={{ marginBottom:10, padding:"6px 10px", background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:4 }}>
+                        <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.1em" }}>
+                          REP RANGE: <span style={{ color:"var(--accent)", fontWeight:600 }}>{e.repsGoal}</span>
+                        </div>
                       </div>
-                      <div>
-                        <label style={S.label}>SET TYPE</label>
-                        <select style={S.select} value={e.setType}
-                          onChange={ev => updateEntry(e.id, { setType: ev.target.value })}>
-                          {SET_TYPES.map(t => <option key={t}>{t}</option>)}
-                        </select>
-                      </div>
+                    )}
+
+                    <div style={{ marginBottom:10 }}>
+                      <label style={S.label}>SET TYPE</label>
+                      <select style={S.select} value={e.setType}
+                        onChange={ev => updateEntry(e.id, { setType: ev.target.value })}>
+                        {SET_TYPES.map(t => <option key={t}>{t}</option>)}
+                      </select>
                     </div>
 
                     <div style={{ marginBottom:4 }}>
@@ -1085,8 +1391,8 @@ export default function App() {
               fontSize:11,
               letterSpacing:"0.12em",
               fontWeight:600,
-              color:"#b8e840",
-              borderColor:"#1a2e00",
+              color:"var(--accent)",
+              borderColor:"var(--accent-border)",
               borderStyle:"dashed",
               background:"transparent",
               marginBottom:10,
@@ -1107,7 +1413,7 @@ export default function App() {
               : `SAVE ${entries.length} ${entries.length === 1 ? "SET" : "SETS"}`}
           </button>
 
-          <div style={{ fontSize:9, color:"#333", textAlign:"center", marginTop:6, letterSpacing:"0.08em" }}>
+          <div style={{ fontSize:9, color:"var(--text-dim)", textAlign:"center", marginTop:6, letterSpacing:"0.08em" }}>
             Saved directly to Google Sheets
           </div>
 
@@ -1118,12 +1424,12 @@ export default function App() {
               {[...localData].reverse().map((r, i) => (
                 <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #161618" }}>
                   <div>
-                    <div style={{ fontSize:12, color:"#e4e4dc" }}>{r.exercise}</div>
-                    <div style={{ fontSize:10, color:"#555" }}>{r.equipment} · {r.date}</div>
+                    <div style={{ fontSize:12, color:"var(--text-primary)" }}>{r.exercise}</div>
+                    <div style={{ fontSize:10, color:"var(--text-label)" }}>{r.equipment} · {r.date}</div>
                   </div>
                   <div style={{ textAlign:"right" }}>
-                    <div style={{ fontSize:13, color:"#b8e840", fontWeight:600 }}>{r.kg} kg × {r.reps}</div>
-                    {r.oneRepMax && <div style={{ fontSize:9, color:"#444" }}>1RM ~{r.oneRepMax}</div>}
+                    <div style={{ fontSize:13, color:"var(--accent)", fontWeight:600 }}>{r.kg} kg × {r.reps}</div>
+                    {r.oneRepMax && <div style={{ fontSize:9, color:"var(--text-faint)" }}>1RM ~{r.oneRepMax}</div>}
                   </div>
                 </div>
               ))}
@@ -1152,8 +1458,13 @@ export default function App() {
               <input style={{...S.input, marginBottom:8}} value={newExSecondary}
                 onChange={e => setNewExSecondary(e.target.value)} placeholder="e.g. TRICEPS, SHOULDERS (comma-separated)" />
               <label style={S.label}>EQUIPMENT</label>
-              <input style={{...S.input, marginBottom:10}} value={newExEquipment}
+              <input style={{...S.input, marginBottom:8}} value={newExEquipment}
                 onChange={e => setNewExEquipment(e.target.value)} placeholder="e.g. BARBELL, DUMBBELLS (comma-separated)" />
+              <label style={S.label}>DEFAULT REP RANGE</label>
+              <select style={{...S.select, marginBottom:10}} value={newExRepRange}
+                onChange={e => setNewExRepRange(e.target.value)}>
+                {REP_RANGES.map(r => <option key={r}>{r}</option>)}
+              </select>
               <div style={{ display:"flex", gap:8 }}>
                 <button
                   style={{...S.btn, flex:1, opacity: savingEx ? 0.6 : 1}}
@@ -1164,10 +1475,10 @@ export default function App() {
                 </button>
                 <button
                   style={S.btnGhost}
-                  onClick={() => { setShowAddEx(false); setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); }}
+                  onClick={() => { setShowAddEx(false); setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepRange("8-10"); }}
                 >Cancel</button>
               </div>
-              <div style={{ fontSize:9, color:"#444", marginTop:8, letterSpacing:"0.05em" }}>
+              <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:8, letterSpacing:"0.05em" }}>
                 Saved to the Exercises sheet. The equipment list determines which options you see when logging this exercise.
               </div>
             </div>
@@ -1187,40 +1498,48 @@ export default function App() {
                     onClick={() => setExpandedEx(key ? null : ex)}>
                     <div>
                       <div style={{ fontSize:13 }}>{ex}</div>
-                      {eqList.length > 0 && <div style={{ fontSize:10, color:"#444", marginTop:2 }}>{eqList.length} equipment</div>}
+                      {eqList.length > 0 && <div style={{ fontSize:10, color:"var(--text-faint)", marginTop:2 }}>{eqList.length} equipment</div>}
                     </div>
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                       {bestOrm && <span style={S.tagGreen}>{bestOrm} kg 1RM</span>}
-                      <span style={{ color:"#333", fontSize:12 }}>{key ? "▲" : "▼"}</span>
+                      <span style={{ color:"var(--text-dim)", fontSize:12 }}>{key ? "▲" : "▼"}</span>
                     </div>
                   </div>
                   {key && (
-                    <div style={{ marginTop:12, borderTop:"1px solid #1a1a1e", paddingTop:12 }}>
+                    <div style={{ marginTop:12, borderTop:"1px solid var(--border-subtle)", paddingTop:12 }}>
                       {/* Muskelgrupper (hvis kendt) */}
                       {(() => {
                         const m = exerciseMuscleMap[ex];
                         if (!m || (!m.primaryMuscle && !m.secondaryMuscles)) return null;
                         return (
-                          <div style={{ marginBottom:12, padding:"8px 10px", background:"#0d1700", borderRadius:4, border:"1px solid #1a2e00" }}>
+                          <div style={{ marginBottom:12, padding:"8px 10px", background:"var(--accent-bg)", borderRadius:4, border:"1px solid var(--accent-border)" }}>
                             {m.primaryMuscle && (
-                              <div style={{ fontSize:10, color:"#888", letterSpacing:"0.1em", marginBottom:4 }}>
-                                PRIMARY: <span style={{ color:"#b8e840", fontWeight:600 }}>{m.primaryMuscle}</span>
+                              <div style={{ fontSize:10, color:"var(--text-muted)", letterSpacing:"0.1em", marginBottom:4 }}>
+                                PRIMARY: <span style={{ color:"var(--accent)", fontWeight:600 }}>{m.primaryMuscle}</span>
                               </div>
                             )}
                             {m.secondaryMuscles && (
-                              <div style={{ fontSize:10, color:"#888", letterSpacing:"0.1em" }}>
-                                SECONDARY: <span style={{ color:"#6a8a30" }}>{m.secondaryMuscles}</span>
+                              <div style={{ fontSize:10, color:"var(--text-muted)", letterSpacing:"0.1em" }}>
+                                SECONDARY: <span style={{ color:"var(--accent-dim)" }}>{m.secondaryMuscles}</span>
                               </div>
                             )}
                           </div>
                         );
                       })()}
-                      {/* Rep range dropdown */}
+                      {/* Default rep range (kan ændres) */}
                       <div style={{ marginBottom:10 }}>
-                        <label style={S.label}>REP RANGE</label>
-                        <select style={S.select}>
+                        <label style={S.label}>DEFAULT REP RANGE</label>
+                        <select
+                          style={S.select}
+                          value={(exerciseMuscleMap[ex] && exerciseMuscleMap[ex].defaultRepRange) || ""}
+                          onChange={ev => handleUpdateRepRange(ex, ev.target.value)}
+                        >
+                          <option value="">— not set —</option>
                           {REP_RANGES.map(r => <option key={r}>{r}</option>)}
                         </select>
+                        <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:4, letterSpacing:"0.05em" }}>
+                          Used as default when logging this exercise.
+                        </div>
                       </div>
                       {/* Redskaber med 1RM */}
                       {eqList.length > 0 && (
@@ -1230,11 +1549,11 @@ export default function App() {
                             const orm = getBest1RM(ex, eq);
                             return (
                               <div key={eq} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"5px 0", borderBottom:"1px solid #161618" }}>
-                                <button style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#b8e840", fontSize:11, fontFamily:"'DM Mono', monospace", letterSpacing:"0.05em" }}
+                                <button style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"var(--accent)", fontSize:11, fontFamily:"'DM Mono', monospace", letterSpacing:"0.05em" }}
                                   onClick={() => { setExpandedEq(eq); setView("equipment"); }}>
                                   {eq} ↗
                                 </button>
-                                {orm && <span style={{ fontSize:11, color:"#555" }}>{orm} kg 1RM</span>}
+                                {orm && <span style={{ fontSize:11, color:"var(--text-label)" }}>{orm} kg 1RM</span>}
                               </div>
                             );
                           })}
@@ -1285,7 +1604,7 @@ export default function App() {
                   onClick={() => { setShowAddEq(false); setNewEqName(""); }}
                 >Cancel</button>
               </div>
-              <div style={{ fontSize:9, color:"#444", marginTop:8, letterSpacing:"0.05em" }}>
+              <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:8, letterSpacing:"0.05em" }}>
                 Saved to the Equipment sheet. New equipment appears in all dropdowns.
               </div>
             </div>
@@ -1302,24 +1621,69 @@ export default function App() {
                     onClick={() => setExpandedEq(key ? null : eq)}>
                     <div>
                       <div style={{ fontSize:13 }}>{eq}</div>
-                      {totalSets > 0 && <div style={{ fontSize:10, color:"#444", marginTop:2 }}>{totalSets} sets · {exercises.length} exercises</div>}
+                      {totalSets > 0 && <div style={{ fontSize:10, color:"var(--text-faint)", marginTop:2 }}>{totalSets} sets · {exercises.length} exercises</div>}
                     </div>
-                    <span style={{ color:"#333", fontSize:12 }}>{key ? "▲" : "▼"}</span>
+                    <span style={{ color:"var(--text-dim)", fontSize:12 }}>{key ? "▲" : "▼"}</span>
                   </div>
                   {key && (
-                    <div style={{ marginTop:12, borderTop:"1px solid #1a1a1e", paddingTop:12 }}>
+                    <div style={{ marginTop:12, borderTop:"1px solid var(--border-subtle)", paddingTop:12 }}>
+                      {/* Handles-administration: vises kun for CABLE TOWER */}
+                      {eq === "CABLE TOWER" && (
+                        <div style={{ marginBottom:14 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                            <div style={S.label}>HANDLES</div>
+                            <button style={{...S.btnGhost, fontSize:10, padding:"3px 8px"}}
+                              onClick={(ev) => { ev.stopPropagation(); setShowAddHandle(showAddHandle === eq ? null : eq); }}>
+                              + ADD HANDLE
+                            </button>
+                          </div>
+                          {showAddHandle === eq && (
+                            <div style={{ background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:4, padding:"8px 10px", marginBottom:8 }}>
+                              <input style={{...S.input, marginBottom:6}} value={newHandleName}
+                                onChange={(ev) => setNewHandleName(ev.target.value)}
+                                placeholder="Handle name (e.g. V-BAR)" />
+                              <div style={{ display:"flex", gap:6 }}>
+                                <button style={{...S.btn, flex:1, fontSize:10, padding:"6px"}}
+                                  disabled={savingHandle || !newHandleName.trim()}
+                                  onClick={() => handleAddHandle(eq)}>
+                                  {savingHandle ? "SAVING..." : "SAVE"}
+                                </button>
+                                <button style={{...S.btnGhost, fontSize:10}}
+                                  onClick={() => { setShowAddHandle(null); setNewHandleName(""); }}>
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                          {getHandlesForEquipment(eq).map(h => {
+                            const setsWithHandle = allRecords.filter(r => r.equipment === eq && r.handle === h).length;
+                            return (
+                              <div key={h} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px solid #161618" }}>
+                                <span style={{ fontSize:11, color:"var(--text-secondary)" }}>{h}</span>
+                                <span style={{ fontSize:10, color:"var(--text-faint)" }}>{setsWithHandle} sets</span>
+                              </div>
+                            );
+                          })}
+                          {getHandlesForEquipment(eq).length === 0 && (
+                            <div style={{ fontSize:10, color:"var(--text-faint)", textAlign:"center", padding:"8px 0" }}>
+                              No handles yet
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {exercises.length > 0 && (
                         <div style={{ marginBottom:10 }}>
-                          <div style={S.label}>Øvelser du har lavet</div>
+                          <div style={S.label}>EXERCISES YOU'VE DONE</div>
                           {exercises.map(ex => {
                             const orm = getBest1RM(ex, eq);
                             return (
                               <div key={ex} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px solid #161618" }}>
-                                <button style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#ccc", fontSize:11, fontFamily:"'DM Mono', monospace" }}
+                                <button style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"var(--text-secondary)", fontSize:11, fontFamily:"'DM Mono', monospace" }}
                                   onClick={() => { setExpandedEx(ex); setView("exercises"); setExpandedEq(null); }}>
                                   {ex}
                                 </button>
-                                {orm && <span style={{ fontSize:11, color:"#555" }}>{orm} kg 1RM</span>}
+                                {orm && <span style={{ fontSize:11, color:"var(--text-label)" }}>{orm} kg 1RM</span>}
                               </div>
                             );
                           })}
@@ -1363,7 +1727,7 @@ export default function App() {
                   onClick={() => { setShowAddGym(false); setNewGymName(""); }}
                 >Cancel</button>
               </div>
-              <div style={{ fontSize:9, color:"#444", marginTop:8, letterSpacing:"0.05em" }}>
+              <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:8, letterSpacing:"0.05em" }}>
                 Gemmes i Centre-arket. Nye gyms vises i dropdown'en når du logger.
               </div>
             </div>
@@ -1375,18 +1739,203 @@ export default function App() {
               const exercisesHere = [...new Set(allRecords.filter(r => r.center === c.name).map(r => r.exercise).filter(Boolean))];
               return (
                 <div key={c.name} style={S.card}>
-                  <div style={{ fontSize:13, color:"#e4e4dc", fontWeight:600 }}>{c.name}</div>
-                  <div style={{ fontSize:10, color:"#555", marginTop:4 }}>
+                  <div style={{ fontSize:13, color:"var(--text-primary)", fontWeight:600 }}>{c.name}</div>
+                  <div style={{ fontSize:10, color:"var(--text-label)", marginTop:4 }}>
                     {setsHere} sets · {exercisesHere.length} different exercises
                   </div>
                 </div>
               );
             })}
           {!sheetCenters.length && (
-            <div style={{ color:"#444", fontSize:12, textAlign:"center", marginTop:40 }}>
+            <div style={{ color:"var(--text-faint)", fontSize:12, textAlign:"center", marginTop:40 }}>
               No gyms yet. Add one with the + button above.
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── EXISTING PLANS ── */}
+      {view === "existing-plans" && (
+        <div style={S.page}>
+          <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+            <input style={{...S.input, flex:1}} placeholder="Search plans..." value={planSearch}
+              onChange={e => setPlanSearch(e.target.value)} />
+            <button style={S.btnGhost} onClick={() => setView("create-plan")}>+ NEW</button>
+          </div>
+          {sheetPlans
+            .filter(p => !planSearch || p.name.toLowerCase().includes(planSearch.toLowerCase()))
+            .map(plan => {
+              const open = expandedPlan === plan.name;
+              const totalSets = plan.sets ? plan.sets.length : 0;
+              const exercises = plan.sets ? [...new Set(plan.sets.map(s => s.exercise))] : [];
+              return (
+                <div key={plan.name} style={S.card}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer" }}
+                    onClick={() => setExpandedPlan(open ? null : plan.name)}>
+                    <div style={{ minWidth:0, flex:1 }}>
+                      <div style={{ fontSize:13, color:"var(--text-primary)", fontWeight:600 }}>{plan.name}</div>
+                      <div style={{ fontSize:10, color:"var(--text-label)", marginTop:2 }}>
+                        {totalSets} sets · {exercises.slice(0, 3).join(", ")}{exercises.length > 3 ? "…" : ""}
+                      </div>
+                    </div>
+                    <span style={{ color:"var(--text-dim)", fontSize:12 }}>{open ? "▲" : "▼"}</span>
+                  </div>
+                  {open && (
+                    <div style={{ marginTop:12, borderTop:"1px solid var(--border-subtle)", paddingTop:10 }}>
+                      {plan.sets && plan.sets
+                        .sort((a, b) => (a.order || 0) - (b.order || 0))
+                        .map((s, i) => (
+                          <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px solid #161618" }}>
+                            <div style={{ minWidth:0, flex:1 }}>
+                              <div style={{ fontSize:12, color:"var(--text-primary)" }}>{s.exercise}</div>
+                              <div style={{ fontSize:10, color:"var(--text-faint)", marginTop:1 }}>
+                                {s.equipment}{s.handle ? ` · ${s.handle}` : ""} · {s.setType || "NORMAL SET"}
+                              </div>
+                            </div>
+                            <div style={{ textAlign:"right", flexShrink:0 }}>
+                              <div style={{ fontSize:11, color:"var(--accent)" }}>
+                                {s.kg ? `${s.kg} kg` : ""} {s.reps ? `× ${s.reps}` : ""}
+                              </div>
+                              {s.repsGoal && <div style={{ fontSize:9, color:"var(--text-faint)" }}>range: {s.repsGoal}</div>}
+                            </div>
+                          </div>
+                        ))}
+                      <div style={{ display:"flex", gap:8, marginTop:10 }}>
+                        <button style={{...S.btn, flex:1, fontSize:10}}
+                          onClick={() => { importPlan(plan.name); setView("log"); setExpandedPlan(null); }}>
+                          IMPORT TO LOG →
+                        </button>
+                        <button style={{...S.btnGhost, fontSize:10, color:"var(--error-mid)", borderColor:"var(--error-border)"}}
+                          onClick={() => handleDeletePlan(plan.name)}>
+                          DELETE
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          {!sheetPlans.length && (
+            <div style={{ color:"var(--text-faint)", fontSize:12, textAlign:"center", marginTop:40 }}>
+              No plans yet. Tap + NEW to create one.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── CREATE PLAN ── */}
+      {view === "create-plan" && (
+        <div style={S.page}>
+          <div style={{...S.card, padding:"10px 14px", marginBottom:10}}>
+            <label style={S.label}>PLAN NAME</label>
+            <input style={S.input} value={planName} onChange={e => setPlanName(e.target.value)}
+              placeholder="e.g. Push Day A" />
+          </div>
+
+          <div style={{ fontSize:10, color:"var(--text-dim)", marginBottom:6, letterSpacing:"0.08em" }}>
+            PLAN · {planSets.length} {planSets.length === 1 ? "set" : "sets"}
+          </div>
+
+          {planSets.map((s, idx) => {
+            const sEquipForExercise = getEquipForExercise(s.exercise);
+            return (
+              <div key={s.id} style={S.card}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                  <div style={{ fontSize:10, color:"var(--text-dim)", letterSpacing:"0.1em" }}>SET {idx + 1}</div>
+                  {planSets.length > 1 && (
+                    <button style={{ background:"none", border:"none", color:"var(--text-label)", fontSize:14, cursor:"pointer", padding:0 }}
+                      onClick={() => removePlanSet(s.id)} aria-label="Remove set">×</button>
+                  )}
+                </div>
+                <div style={{ marginBottom:10 }}>
+                  <label style={S.label}>EXERCISE</label>
+                  <select style={S.select} value={s.exercise}
+                    onChange={ev => {
+                      const newEx = ev.target.value;
+                      const meta = exerciseMuscleMap[newEx];
+                      updatePlanSet(s.id, {
+                        exercise: newEx,
+                        equipment: "",
+                        handle: "",
+                        repsGoal: (meta && meta.defaultRepRange) || s.repsGoal || "8-10",
+                      });
+                    }}>
+                    <option value="">— CHOOSE EXERCISE —</option>
+                    {allExercises.map(ex => <option key={ex}>{ex}</option>)}
+                  </select>
+                </div>
+                <div style={{ marginBottom:10 }}>
+                  <label style={S.label}>EQUIPMENT</label>
+                  <select style={S.select} value={s.equipment}
+                    onChange={ev => updatePlanSet(s.id, {
+                      equipment: ev.target.value,
+                      handle: ev.target.value === "CABLE TOWER" ? s.handle : "",
+                    })}>
+                    <option value="">— CHOOSE EQUIPMENT —</option>
+                    {sEquipForExercise.map(eq => <option key={eq}>{eq}</option>)}
+                  </select>
+                </div>
+                {s.equipment === "CABLE TOWER" && (
+                  <div style={{ marginBottom:10 }}>
+                    <label style={S.label}>HANDLE</label>
+                    <select style={S.select} value={s.handle || ""}
+                      onChange={ev => updatePlanSet(s.id, { handle: ev.target.value })}>
+                      <option value="">— CHOOSE HANDLE —</option>
+                      {getHandlesForEquipment("CABLE TOWER").map(h => <option key={h}>{h}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div style={{...S.grid2, marginBottom:10}}>
+                  <div>
+                    <label style={S.label}>TARGET Kg</label>
+                    <input type="number" style={S.input} value={s.kg}
+                      onChange={ev => updatePlanSet(s.id, { kg: ev.target.value })}
+                      placeholder="optional" />
+                  </div>
+                  <div>
+                    <label style={S.label}>TARGET REPS</label>
+                    <input type="number" style={S.input} value={s.reps}
+                      onChange={ev => updatePlanSet(s.id, { reps: ev.target.value })}
+                      placeholder="optional" />
+                  </div>
+                </div>
+                <div style={{...S.grid2, marginBottom:10}}>
+                  <div>
+                    <label style={S.label}>REP RANGE</label>
+                    <select style={S.select} value={s.repsGoal}
+                      onChange={ev => updatePlanSet(s.id, { repsGoal: ev.target.value })}>
+                      {REP_RANGES.map(r => <option key={r}>{r}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={S.label}>SET TYPE</label>
+                    <select style={S.select} value={s.setType}
+                      onChange={ev => updatePlanSet(s.id, { setType: ev.target.value })}>
+                      {SET_TYPES.map(t => <option key={t}>{t}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label style={S.label}>NOTES</label>
+                  <input type="text" style={S.input} placeholder="Optional..." value={s.notes}
+                    onChange={ev => updatePlanSet(s.id, { notes: ev.target.value })} />
+                </div>
+              </div>
+            );
+          })}
+
+          <button style={{...S.btnGhost, width:"100%", marginBottom:14, padding:"12px", fontSize:11, color:"var(--accent)", borderColor:"var(--accent-border)"}}
+            onClick={addPlanSet}>
+            + ADD SET
+          </button>
+
+          <button
+            style={{...S.btn, width:"100%", marginBottom:10, opacity: savingPlan || !planName.trim() ? 0.6 : 1}}
+            onClick={handleSavePlan}
+            disabled={savingPlan || !planName.trim()}
+          >
+            {savingPlan ? "SAVING..." : `SAVE PLAN`}
+          </button>
         </div>
       )}
 
@@ -1423,7 +1972,7 @@ export default function App() {
 
             if (!filteredDays.length) {
               return (
-                <div style={{ color:"#444", fontSize:12, textAlign:"center", marginTop:40 }}>
+                <div style={{ color:"var(--text-faint)", fontSize:12, textAlign:"center", marginTop:40 }}>
                   No sets match filter
                 </div>
               );
@@ -1440,8 +1989,8 @@ export default function App() {
                     onClick={() => setExpandedDay(isOpen ? null : day.date)}
                   >
                     <div style={{ minWidth:0, flex:1 }}>
-                      <div style={{ fontSize:13, color:"#e4e4dc", fontWeight:600 }}>{day.date}</div>
-                      <div style={{ fontSize:10, color:"#555", marginTop:2 }}>
+                      <div style={{ fontSize:13, color:"var(--text-primary)", fontWeight:600 }}>{day.date}</div>
+                      <div style={{ fontSize:10, color:"var(--text-label)", marginTop:2 }}>
                         {(() => {
                           const centersForDay = [...new Set(day.records.map(r => r.center).filter(Boolean))];
                           const centerLabel = centersForDay.length === 1 ? centersForDay[0]
@@ -1449,42 +1998,44 @@ export default function App() {
                           return (
                             <>
                               {day.records.length} sets · {exercisesForDay.slice(0, 3).join(", ")}{exercisesForDay.length > 3 ? "…" : ""}
-                              {centerLabel && <span style={{ color:"#4a6a00", marginLeft:4 }}> · {centerLabel}</span>}
+                              {centerLabel && <span style={{ color:"var(--accent-dim)", marginLeft:4 }}> · {centerLabel}</span>}
                             </>
                           );
                         })()}
                       </div>
                     </div>
-                    <span style={{ color:"#444", fontSize:12, flexShrink:0, marginLeft:8 }}>{isOpen ? "▲" : "▼"}</span>
+                    <span style={{ color:"var(--text-faint)", fontSize:12, flexShrink:0, marginLeft:8 }}>{isOpen ? "▲" : "▼"}</span>
                   </div>
 
                   {/* Sæt-liste for dagen */}
                   {isOpen && (
-                    <div style={{ marginTop:10, borderTop:"1px solid #1a1a1e", paddingTop:8 }}>
+                    <div style={{ marginTop:10, borderTop:"1px solid var(--border-subtle)", paddingTop:8 }}>
                       {day.records.map((r, i) => {
                         const isPR = r.oneRepMax && getBest1RM(r.exercise, r.equipment, r.handle, r.center) === r.oneRepMax;
                         return (
                           <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #161618" }}>
                             <div style={{ minWidth:0, flex:1 }}>
-                              <div style={{ fontSize:12, color:"#e4e4dc" }}>
+                              <div style={{ fontSize:12, color:"var(--text-primary)" }}>
                                 {r.exercise}
                                 {isPR && <span style={{...S.tagGreen, marginLeft:6}}>PR</span>}
                               </div>
-                              <div style={{ fontSize:10, color:"#444", marginTop:1 }}>
+                              <div style={{ fontSize:10, color:"var(--text-faint)", marginTop:1 }}>
                                 {r.equipment}{r.handle ? ` · ${r.handle}` : ""}
-                                {r.center && <span style={{ color:"#4a6a00" }}> · {r.center}</span>}
+                                {r.center && <span style={{ color:"var(--accent-dim)" }}> · {r.center}</span>}
                               </div>
                             </div>
                             <div style={{ textAlign:"right", flexShrink:0 }}>
-                              <div style={{ fontSize:13, color:"#b8e840", fontWeight:600 }}>{r.kg} kg × {r.reps}</div>
-                              {r.oneRepMax && <div style={{ fontSize:9, color:"#444" }}>1RM ~{r.oneRepMax}</div>}
+                              <div style={{ fontSize:13, color:"var(--accent)", fontWeight:600 }}>
+                                {r.kg != null ? r.kg : "—"} kg × {r.reps != null ? r.reps : "—"}
+                              </div>
+                              {r.oneRepMax && <div style={{ fontSize:9, color:"var(--text-faint)" }}>1RM ~{r.oneRepMax}</div>}
                             </div>
                           </div>
                         );
                       })}
                       {/* Hurtig-knap: importér dagen til LOG */}
                       <button
-                        style={{...S.btnGhost, width:"100%", marginTop:10, padding:"8px", fontSize:10, color:"#b8e840", borderColor:"#1a2e00"}}
+                        style={{...S.btnGhost, width:"100%", marginTop:10, padding:"8px", fontSize:10, color:"var(--accent)", borderColor:"var(--accent-border)"}}
                         onClick={(ev) => {
                           ev.stopPropagation();
                           importFromDay(day.date);
@@ -1529,7 +2080,7 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
   const equipment = [...new Set(records.map(r => r.equipment).filter(Boolean))];
 
   if (!records.length) return (
-    <div style={{ color:"#444", fontSize:12, textAlign:"center", marginTop:40 }}>
+    <div style={{ color:"var(--text-faint)", fontSize:12, textAlign:"center", marginTop:40 }}>
       No data for {exercise}
     </div>
   );
@@ -1537,7 +2088,20 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
   return (
     <div>
       {equipment.map(eq => {
-        const recs = records.filter(r => r.equipment === eq).slice(0, 20).reverse();
+        // Filtrér records for dette equipment, og aggregér til bedste 1RM pr. dag
+        const allRecs = records.filter(r => r.equipment === eq && r.oneRepMax);
+        const bestPerDay = {};
+        for (const r of allRecs) {
+          const d = r.date;
+          if (!d) continue;
+          if (!bestPerDay[d] || r.oneRepMax > bestPerDay[d].oneRepMax) {
+            bestPerDay[d] = r;
+          }
+        }
+        const recs = Object.values(bestPerDay)
+          .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+          .slice(-30); // sidste 30 træningsdage
+
         // Aggregat: max på tværs af alle handle/center varianter for denne (exercise, equipment)
         const prefix = `${exercise}||${eq}||`;
         let best = null;
@@ -1549,26 +2113,28 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
         }
         return (
           <div key={eq} style={{ marginBottom:20 }}>
-            <div style={{ fontSize:11, color:"#b8e840", letterSpacing:"0.1em", marginBottom:8 }}>{eq}</div>
+            <div style={{ fontSize:11, color:"var(--accent)", letterSpacing:"0.1em", marginBottom:8 }}>{eq}</div>
             {best && (
-              <div style={{ background:"#0c1800", border:"1px solid #1a2e00", borderRadius:8, padding:"10px 12px", marginBottom:10 }}>
-                <div style={{ fontSize:9, color:"#4a6a00", letterSpacing:"0.12em", marginBottom:6 }}>BEST 1RM: {best} kg</div>
+              <div style={{ background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:8, padding:"10px 12px", marginBottom:10 }}>
+                <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.12em", marginBottom:6 }}>BEST 1RM: {best} kg</div>
                 {[[40,"Warm-up"],[60,"Light"],[80,"Working"]].map(([pct, label]) => (
                   <div key={pct} style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
-                    <span style={{ fontSize:10, color:"#555" }}>{pct}% — {label}</span>
-                    <span style={{ fontSize:11, color:"#b8e840", fontWeight:600 }}>{Math.round(best * pct / 100 * 2) / 2} kg</span>
+                    <span style={{ fontSize:10, color:"var(--text-label)" }}>{pct}% — {label}</span>
+                    <span style={{ fontSize:11, color:"var(--accent)", fontWeight:600 }}>{Math.round(best * pct / 100 * 2) / 2} kg</span>
                   </div>
                 ))}
               </div>
             )}
-            {/* Simpel progressionskurve */}
+            {/* Progression: bedste 1RM pr. dag */}
             <ProgressChart records={recs} />
-            {/* Latest sets */}
+            {/* Seneste 5 dage med højeste 1RM på dagen */}
             <div style={{ marginTop:8 }}>
               {[...recs].reverse().slice(0, 5).map((r, i) => (
                 <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #161618" }}>
-                  <span style={{ fontSize:10, color:"#555" }}>{r.date}</span>
-                  <span style={{ fontSize:11, color:"#ccc" }}>{r.kg} kg × {r.reps} → <span style={{ color:"#b8e840" }}>{r.oneRepMax} 1RM</span></span>
+                  <span style={{ fontSize:10, color:"var(--text-label)" }}>{r.date}</span>
+                  <span style={{ fontSize:11, color:"var(--text-secondary)" }}>
+                    {r.kg != null ? r.kg : "—"} kg × {r.reps != null ? r.reps : "—"} → <span style={{ color:"var(--accent)" }}>{r.oneRepMax} 1RM</span>
+                  </span>
                 </div>
               ))}
             </div>
@@ -1595,13 +2161,13 @@ function ProgressChart({ records }) {
     <svg width={W} height={H} style={{ display:"block", overflow:"visible" }}>
       <polyline points={pts.map(p => `${p.x},${p.y}`).join(" ")}
         fill="none" stroke="#1a3000" strokeWidth={8} />
-      <path d={path} fill="none" stroke="#b8e840" strokeWidth={1.5} />
+      <path d={path} fill="none" stroke="var(--accent)" strokeWidth={1.5} />
       {pts.map((p, i) => (
         <circle key={i} cx={p.x} cy={p.y} r={i === pts.length - 1 ? 3 : 2}
-          fill={i === pts.length - 1 ? "#b8e840" : "#555"} />
+          fill={i === pts.length - 1 ? "var(--accent)" : "var(--text-label)"} />
       ))}
-      <text x={pts[0].x} y={H - 2} textAnchor="middle" fill="#333" fontSize={7} fontFamily="DM Mono, monospace">{pts[0].date?.slice(5)}</text>
-      <text x={pts[pts.length-1].x} y={H - 2} textAnchor="middle" fill="#333" fontSize={7} fontFamily="DM Mono, monospace">{pts[pts.length-1].date?.slice(5)}</text>
+      <text x={pts[0].x} y={H - 2} textAnchor="middle" fill="var(--text-dim)" fontSize={7} fontFamily="DM Mono, monospace">{pts[0].date?.slice(5)}</text>
+      <text x={pts[pts.length-1].x} y={H - 2} textAnchor="middle" fill="var(--text-dim)" fontSize={7} fontFamily="DM Mono, monospace">{pts[pts.length-1].date?.slice(5)}</text>
     </svg>
   );
 }
