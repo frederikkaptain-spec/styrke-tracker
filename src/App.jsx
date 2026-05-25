@@ -677,38 +677,8 @@ export default function App() {
 
   // STATS state + lazy loading
   const [statsEx, setStatsEx] = useState("");
-  const [exerciseDetailCache, setExerciseDetailCache] = useState({}); // { exercise: [records] }
+  const [exerciseDetailCache, setExerciseDetailCache] = useState({});
   const [loadingDetail, setLoadingDetail] = useState(false);
-
-  const loadExerciseDetail = useCallback(async (exercise) => {
-    if (!exercise) return;
-    if (exerciseDetailCache[exercise]) return; // allerede cached
-    if (!isAppsScriptConfigured()) return; // kun med Apps Script
-    setLoadingDetail(true);
-    try {
-      const url = `${APPS_SCRIPT_URL}?type=exercise_detail&exercise=${encodeURIComponent(exercise)}`;
-      const res = await fetch(url, { cache: "no-store" });
-      if (res.ok) {
-        const text = await res.text();
-        if (!text.trim().startsWith("<")) {
-          const json = JSON.parse(text);
-          if (json.sets) {
-            setExerciseDetailCache(prev => ({ ...prev, [exercise]: json.sets }));
-          }
-        }
-      }
-    } catch (e) {
-      console.error("Exercise detail fetch failed:", e);
-    } finally {
-      setLoadingDetail(false);
-    }
-  }, [exerciseDetailCache]);
-
-  // Alle records for en specifik øvelse: detail cache > allRecords
-  const getRecordsForExercise = useCallback((exercise) => {
-    if (exerciseDetailCache[exercise]) return exerciseDetailCache[exercise];
-    return allRecords.filter(r => r.exercise === exercise);
-  }, [exerciseDetailCache, allRecords]);
 
   // ── Alle records ──
   const allData = useMemo(() => SEED_DATA.map(r => ({
@@ -920,6 +890,34 @@ export default function App() {
         exercises: [...new Set(records.map(r => r.exercise).filter(Boolean))],
       }));
   }, [allRecords]);
+
+  // ── Lazy loading til INSIGHTS ──
+  const loadExerciseDetail = useCallback(async (exercise) => {
+    if (!exercise) return;
+    if (exerciseDetailCache[exercise]) return;
+    if (!isAppsScriptConfigured()) return;
+    setLoadingDetail(true);
+    try {
+      const url = `${APPS_SCRIPT_URL}?type=exercise_detail&exercise=${encodeURIComponent(exercise)}`;
+      const res = await fetch(url, { cache: "no-store" });
+      if (res.ok) {
+        const text = await res.text();
+        if (!text.trim().startsWith("<")) {
+          const json = JSON.parse(text);
+          if (json.sets) setExerciseDetailCache(prev => ({ ...prev, [exercise]: json.sets }));
+        }
+      }
+    } catch (e) {
+      console.error("Exercise detail fetch failed:", e);
+    } finally {
+      setLoadingDetail(false);
+    }
+  }, [exerciseDetailCache]);
+
+  const getRecordsForExercise = useCallback((exercise) => {
+    if (exerciseDetailCache[exercise]) return exerciseDetailCache[exercise];
+    return allRecords.filter(r => r.exercise === exercise);
+  }, [exerciseDetailCache, allRecords]);
 
   // ── Exercise lists ──
   const allExercises = useMemo(() => {
@@ -2246,6 +2244,7 @@ export default function App() {
             const filteredDays = daysGrouped
               .map(d => ({
                 ...d,
+                    <div style={{ minWidth:0, flex:1 }}>
                 records: d.records.filter(r =>
                   (!histEx || r.exercise === histEx) &&
                   (!histEq || r.equipment === histEq) &&
@@ -2273,7 +2272,6 @@ export default function App() {
                     style={{ display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer", userSelect:"none" }}
                     onClick={() => setExpandedDay(isOpen ? null : day.date)}
                   >
-                    <div style={{ minWidth:0, flex:1 }}>
                       <div style={{ fontSize:13, color:"var(--text-primary)", fontWeight:600 }}>{toDisplay(day.date)}</div>
                       <div style={{ fontSize:10, color:"var(--text-label)", marginTop:2 }}>
                         {(() => {
