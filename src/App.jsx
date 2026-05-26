@@ -449,6 +449,7 @@ export default function App() {
   const [expandedEq, setExpandedEq] = useState(null);
   const [showAddEq, setShowAddEq] = useState(false);
   const [newEqName, setNewEqName] = useState("");
+  const [newEqHandles, setNewEqHandles] = useState("");
   const [savingEq, setSavingEq] = useState(false);
 
   // GYMS (centre) state
@@ -806,16 +807,29 @@ export default function App() {
         if (prev.some(e => e.name.toLowerCase() === name.toLowerCase())) return prev;
         return [...prev, { name }];
       });
+      // Gem handles hvis angivet
+      if (newEqHandles.trim()) {
+        const handles = newEqHandles.split(",").map(h => h.trim().toUpperCase()).filter(Boolean);
+        for (const h of handles) {
+          await saveHandleToSheet({ name: h, equipment: name });
+          setSheetHandles(prev => {
+            if (prev.some(x => x.name === h && x.equipment === name)) return prev;
+            return [...prev, { name: h, equipment: name }];
+          });
+        }
+      }
       setNewEqName("");
+      setNewEqHandles("");
       setShowAddEq(false);
       showToast(`"${name}" added ✓`, true);
     } else {
       setNewEqName("");
+      setNewEqHandles("");
       setShowAddEq(false);
       showToast("Could not save to Sheets", false);
     }
     setSavingEq(false);
-  }, [newEqName]);
+  }, [newEqName, newEqHandles]);
 
   // ── Tilføj nyt gym (gemmes i Sheets, Centre-arket) ──
   const handleAddGym = useCallback(async () => {
@@ -1829,8 +1843,11 @@ export default function App() {
           {showAddEq && (
             <div style={{...S.card, marginBottom:10}}>
               <label style={S.label}>NEW EQUIPMENT</label>
-              <input style={{...S.input, marginBottom:10}} value={newEqName}
+              <input style={{...S.input, marginBottom:8}} value={newEqName}
                 onChange={e => setNewEqName(e.target.value)} placeholder="Name (e.g. Lat Pulldown Machine)..." />
+              <label style={S.label}>HANDLES / GRIPS (optional)</label>
+              <input style={{...S.input, marginBottom:10}} value={newEqHandles}
+                onChange={e => setNewEqHandles(e.target.value)} placeholder="Comma-separated, e.g. WIDE, NEUTRAL, CLOSE" />
               <div style={{ display:"flex", gap:8 }}>
                 <button
                   style={{...S.btn, flex:1, opacity: savingEq ? 0.6 : 1}}
@@ -1841,11 +1858,11 @@ export default function App() {
                 </button>
                 <button
                   style={S.btnGhost}
-                  onClick={() => { setShowAddEq(false); setNewEqName(""); }}
+                  onClick={() => { setShowAddEq(false); setNewEqName(""); setNewEqHandles(""); }}
                 >Cancel</button>
               </div>
               <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:8, letterSpacing:"0.05em" }}>
-                Saved to the Equipment sheet. New equipment appears in all dropdowns.
+                Saved to the Equipment sheet. Handles saved to the Handles sheet.
               </div>
             </div>
           )}
@@ -1867,50 +1884,57 @@ export default function App() {
                   </div>
                   {key && (
                     <div style={{ marginTop:12, borderTop:"1px solid var(--border-subtle)", paddingTop:12 }}>
-                      {/* Handles-administration: vises kun for CABLE TOWER */}
-                      {eq === "CABLE TOWER" && (
-                        <div style={{ marginBottom:14 }}>
-                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
-                            <div style={S.label}>HANDLES</div>
-                            <button style={{...S.btnGhost, fontSize:10, padding:"3px 8px"}}
-                              onClick={(ev) => { ev.stopPropagation(); setShowAddHandle(showAddHandle === eq ? null : eq); }}>
-                              + ADD HANDLE
-                            </button>
+                      {/* Handles-administration: vises for alle redskaber */}
+                      {(() => {
+                        const handles = getHandlesForEquipment(eq);
+                        const hasHandleHistory = allRecords.some(r => r.equipment === eq && r.handle);
+                        // Vis handles-sektion hvis: CABLE TOWER, eller redskabet har handles i historik, eller sheet-handles
+                        const showHandles = eq === "CABLE TOWER" || hasHandleHistory || handles.length > 0;
+                        if (!showHandles) return null;
+                        return (
+                          <div style={{ marginBottom:14 }}>
+                            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                              <div style={S.label}>HANDLES / GRIPS</div>
+                              <button style={{...S.btnGhost, fontSize:10, padding:"3px 8px"}}
+                                onClick={(ev) => { ev.stopPropagation(); setShowAddHandle(showAddHandle === eq ? null : eq); }}>
+                                + ADD
+                              </button>
+                            </div>
+                            {showAddHandle === eq && (
+                              <div style={{ background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:4, padding:"8px 10px", marginBottom:8 }}>
+                                <input style={{...S.input, marginBottom:6}} value={newHandleName}
+                                  onChange={(ev) => setNewHandleName(ev.target.value)}
+                                  placeholder="e.g. ROPE, WIDE GRIP, V-BAR..." />
+                                <div style={{ display:"flex", gap:6 }}>
+                                  <button style={{...S.btn, flex:1, fontSize:10, padding:"6px"}}
+                                    disabled={savingHandle || !newHandleName.trim()}
+                                    onClick={() => handleAddHandle(eq)}>
+                                    {savingHandle ? "SAVING..." : "SAVE"}
+                                  </button>
+                                  <button style={{...S.btnGhost, fontSize:10}}
+                                    onClick={() => { setShowAddHandle(null); setNewHandleName(""); }}>
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                            {handles.map(h => {
+                              const setsWithHandle = allRecords.filter(r => r.equipment === eq && r.handle === h).length;
+                              return (
+                                <div key={h} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px solid var(--border-faint)" }}>
+                                  <span style={{ fontSize:11, color:"var(--text-secondary)" }}>{h}</span>
+                                  <span style={{ fontSize:10, color:"var(--text-faint)" }}>{setsWithHandle} sets</span>
+                                </div>
+                              );
+                            })}
+                            {handles.length === 0 && (
+                              <div style={{ fontSize:10, color:"var(--text-faint)", padding:"6px 0" }}>
+                                No handles yet — add one above.
+                              </div>
+                            )}
                           </div>
-                          {showAddHandle === eq && (
-                            <div style={{ background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:4, padding:"8px 10px", marginBottom:8 }}>
-                              <input style={{...S.input, marginBottom:6}} value={newHandleName}
-                                onChange={(ev) => setNewHandleName(ev.target.value)}
-                                placeholder="Handle name (e.g. V-BAR)" />
-                              <div style={{ display:"flex", gap:6 }}>
-                                <button style={{...S.btn, flex:1, fontSize:10, padding:"6px"}}
-                                  disabled={savingHandle || !newHandleName.trim()}
-                                  onClick={() => handleAddHandle(eq)}>
-                                  {savingHandle ? "SAVING..." : "SAVE"}
-                                </button>
-                                <button style={{...S.btnGhost, fontSize:10}}
-                                  onClick={() => { setShowAddHandle(null); setNewHandleName(""); }}>
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                          {getHandlesForEquipment(eq).map(h => {
-                            const setsWithHandle = allRecords.filter(r => r.equipment === eq && r.handle === h).length;
-                            return (
-                              <div key={h} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px solid #161618" }}>
-                                <span style={{ fontSize:11, color:"var(--text-secondary)" }}>{h}</span>
-                                <span style={{ fontSize:10, color:"var(--text-faint)" }}>{setsWithHandle} sets</span>
-                              </div>
-                            );
-                          })}
-                          {getHandlesForEquipment(eq).length === 0 && (
-                            <div style={{ fontSize:10, color:"var(--text-faint)", textAlign:"center", padding:"8px 0" }}>
-                              No handles yet
-                            </div>
-                          )}
-                        </div>
-                      )}
+                        );
+                      })()}
 
                       {exercises.length > 0 && (
                         <div style={{ marginBottom:10 }}>
@@ -2400,31 +2424,19 @@ export default function App() {
         </div>
       )}
 
-      {/* ── STATS ── */}
+      {/* ── INSIGHTS ── */}
       {view === "insights" && (
         <div style={S.page}>
-          <div style={{ marginBottom:12 }}>
-            <label style={S.label}>EXERCISE</label>
-            <select style={S.select} value={statsEx} onChange={e => {
-              setStatsEx(e.target.value);
-              loadExerciseDetail(e.target.value);
-            }}>
-              <option value="">— CHOOSE EXERCISE —</option>
-              {allExercises.map(ex => <option key={ex}>{ex}</option>)}
-            </select>
-          </div>
-          {loadingDetail && statsEx && (
-            <div style={{ fontSize:10, color:"var(--text-muted)", textAlign:"center", padding:"20px 0", letterSpacing:"0.08em" }}>
-              ↻ LOADING FULL HISTORY…
-            </div>
-          )}
-          {statsEx && !loadingDetail && (
-            <StatsView
-              exercise={statsEx}
-              allRecords={getRecordsForExercise(statsEx)}
-              best1RMMap={best1RMMap}
-            />
-          )}
+          <InsightsView
+            allRecords={allRecords}
+            exerciseDetailCache={exerciseDetailCache}
+            loadExerciseDetail={loadExerciseDetail}
+            getRecordsForExercise={getRecordsForExercise}
+            loadingDetail={loadingDetail}
+            statsEx={statsEx}
+            setStatsEx={setStatsEx}
+            best1RMMap={best1RMMap}
+          />
         </div>
       )}
 
@@ -2434,11 +2446,59 @@ export default function App() {
   );
 }
 
+// ─── INSIGHTS VIEW ────────────────────────────────────────────────────────────
+// Wrapper der auto-loader historik ved mount og viser kun øvelser med data
+function InsightsView({ allRecords, exerciseDetailCache, loadExerciseDetail, getRecordsForExercise, loadingDetail, statsEx, setStatsEx, best1RMMap }) {
+  // Øvelser der faktisk har historik (fra allRecords som dækker 90 dage)
+  const exercisesWithData = [...new Set(allRecords.filter(r => r.oneRepMax).map(r => r.exercise).filter(Boolean))].sort();
+
+  // Auto-load fuld historik for valgt øvelse ved mount eller skift
+  useEffect(() => {
+    if (statsEx) loadExerciseDetail(statsEx);
+  }, [statsEx]);
+
+  // Hvis ingen øvelse valgt endnu — vælg automatisk den første med data
+  useEffect(() => {
+    if (!statsEx && exercisesWithData.length > 0) {
+      setStatsEx(exercisesWithData[0]);
+    }
+  }, [exercisesWithData.length]);
+
+  return (
+    <div>
+      <div style={{ marginBottom:12 }}>
+        <label style={S.label}>EXERCISE</label>
+        <select style={S.select} value={statsEx} onChange={e => setStatsEx(e.target.value)}>
+          {exercisesWithData.map(ex => <option key={ex}>{ex}</option>)}
+        </select>
+        {loadingDetail && (
+          <div style={{ fontSize:9, color:"var(--text-muted)", marginTop:6, letterSpacing:"0.08em" }}>
+            ↻ LOADING FULL HISTORY…
+          </div>
+        )}
+      </div>
+      {statsEx && (
+        <StatsView
+          exercise={statsEx}
+          allRecords={getRecordsForExercise(statsEx)}
+          best1RMMap={best1RMMap}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── STATS VIEW ───────────────────────────────────────────────────────────────
+// Viser progression pr. (equipment + handle) — cable tower splittes pr. handle
 function StatsView({ exercise, allRecords, best1RMMap }) {
-  const [showAllEq, setShowAllEq] = useState({});
+  const [showAllKey, setShowAllKey] = useState({});
   const records = allRecords.filter(r => r.exercise === exercise && r.oneRepMax);
-  const equipment = [...new Set(records.map(r => r.equipment).filter(Boolean))];
+
+  // Gruppe-nøgle: equipment + handle hvis handle er sat, ellers bare equipment
+  const groupKeys = [...new Set(records.map(r => {
+    const h = r.handle ? ` · ${r.handle}` : "";
+    return `${r.equipment}${h}`;
+  }).filter(Boolean))].sort();
 
   if (!records.length) return (
     <div style={{ color:"var(--text-faint)", fontSize:12, textAlign:"center", marginTop:40 }}>
@@ -2448,10 +2508,21 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
 
   return (
     <div>
-      {equipment.map(eq => {
-        const allRecs = records.filter(r => r.equipment === eq && r.oneRepMax);
+      {groupKeys.map(groupKey => {
+        // Split gruppe-nøgle tilbage til equipment + handle
+        const dotIdx = groupKey.indexOf(" · ");
+        const eq = dotIdx >= 0 ? groupKey.slice(0, dotIdx) : groupKey;
+        const handle = dotIdx >= 0 ? groupKey.slice(dotIdx + 3) : "";
+
+        const groupRecs = records.filter(r => {
+          const matchEq = r.equipment === eq;
+          const matchHandle = handle ? r.handle === handle : !r.handle;
+          return matchEq && matchHandle && r.oneRepMax;
+        });
+
+        // Aggregér til bedste 1RM pr. dag
         const bestPerDay = {};
-        for (const r of allRecs) {
+        for (const r of groupRecs) {
           const d = r.date;
           if (!d) continue;
           if (!bestPerDay[d] || r.oneRepMax > bestPerDay[d].oneRepMax) bestPerDay[d] = r;
@@ -2459,22 +2530,34 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
         const recs = Object.values(bestPerDay)
           .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
         const recsForChart = recs.slice(-30);
+        if (!recs.length) return null;
 
-        const prefix = `${exercise}||${eq}||`;
-        let best = null;
-        for (const key in best1RMMap) {
-          if (key.startsWith(prefix)) {
-            const v = best1RMMap[key];
-            if (best == null || v > best) best = v;
+        // Bedste 1RM for denne gruppe fra server-map
+        const mapKey = `${exercise}||${eq}||${handle}||`;
+        let best = best1RMMap[mapKey] || null;
+        // Fallback: beregn fra records
+        if (!best) {
+          for (const r of groupRecs) {
+            if (r.oneRepMax && (!best || r.oneRepMax > best)) best = r.oneRepMax;
           }
         }
 
-        const showAll = showAllEq[eq];
+        const showAll = showAllKey[groupKey];
         const displayRecs = showAll ? [...recs].reverse() : [...recs].reverse().slice(0, 5);
 
         return (
-          <div key={eq} style={{ marginBottom:20 }}>
-            <div style={{ fontSize:11, color:"var(--accent)", letterSpacing:"0.1em", marginBottom:8 }}>{eq}</div>
+          <div key={groupKey} style={{ marginBottom:24, paddingBottom:16, borderBottom:"1px solid var(--border-subtle)" }}>
+            {/* Header: equipment + evt. handle */}
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+              <div style={{ fontSize:11, color:"var(--accent)", letterSpacing:"0.1em", fontWeight:600 }}>{eq}</div>
+              {handle && (
+                <div style={{ fontSize:10, color:"var(--text-muted)", background:"var(--border-faint)", borderRadius:4, padding:"2px 7px", letterSpacing:"0.06em" }}>
+                  {handle}
+                </div>
+              )}
+            </div>
+
+            {/* Bedste 1RM + opvarmning */}
             {best && (
               <div style={{ background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:8, padding:"10px 12px", marginBottom:10 }}>
                 <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.12em", marginBottom:6 }}>BEST 1RM: {best} kg</div>
@@ -2486,9 +2569,11 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
                 ))}
               </div>
             )}
+
+            {/* Progressionskurve */}
             <ProgressChart records={recsForChart} />
 
-            {/* Historik — seneste 5 med fold-ud */}
+            {/* Historik med fold-ud */}
             <div style={{ marginTop:8 }}>
               {displayRecs.map((r, i) => (
                 <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px solid var(--border-faint)" }}>
@@ -2501,8 +2586,8 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
               {recs.length > 5 && (
                 <button
                   style={{ background:"none", border:"none", cursor:"pointer", width:"100%", padding:"8px 0", fontSize:10, color:"var(--text-dim)", fontFamily:"'DM Mono', monospace", letterSpacing:"0.08em" }}
-                  onClick={() => setShowAllEq(prev => ({ ...prev, [eq]: !prev[eq] }))}>
-                  {showAll ? `▲ SHOW LESS` : `▼ SHOW ALL ${recs.length} SESSIONS`}
+                  onClick={() => setShowAllKey(prev => ({ ...prev, [groupKey]: !prev[groupKey] }))}>
+                  {showAll ? "▲ SHOW LESS" : `▼ SHOW ALL ${recs.length} SESSIONS`}
                 </button>
               )}
             </div>
