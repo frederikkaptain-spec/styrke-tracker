@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxl3nA_qW9T-YfNo7zBUByolqfoniBoRiYtO-Tu4xY3csc4VOUcQSH9IdfSbUq-OerZ/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwZJAREnQzsBqGeo0BF9Pk0Y4s66_of9tF5tvyYRibITyU7E8HrKonABjTRrVkaGrw4/exec";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
@@ -496,9 +496,9 @@ export default function App() {
       });
       setNewHandleName("");
       setShowAddHandle(null);
-      showToast(`Handle "${name}" added ✓`, true);
+      showToast(`Handle "${name}" ADDED ✓`, true);
     } else {
-      showToast("Could not save handle", false);
+      showToast("COULD NOT SAVE HANDLE — TRY AGAIN", false);
     }
     setSavingHandle(false);
   }, [newHandleName]);
@@ -551,9 +551,9 @@ export default function App() {
 
   const handleSavePlan = useCallback(async () => {
     const name = planName.trim();
-    if (!name) { showToast("Plan needs a name", false); return; }
+    if (!name) { showToast("NAME YOUR PROGRAM BEFORE SAVING", false); return; }
     const validSets = planSets.filter(s => s.exercise);
-    if (!validSets.length) { showToast("Plan needs at least one set", false); return; }
+    if (!validSets.length) { showToast("ADD AT LEAST ONE SET BEFORE SAVING", false); return; }
     setSavingPlan(true);
 
     // Hvis vi redigerer og har omdøbt planen — slet den gamle
@@ -577,10 +577,10 @@ export default function App() {
       setPlanName("");
       setPlanSets([{ id: newPlanSetId(), exercise: "", equipment: "", handle: "", kg: "", reps: "", repsGoal: "8-10", setType: "NORMAL SET", notes: "" }]);
       setEditingPlanName(null);
-      showToast(editingPlanName ? `Plan "${name}" updated ✓` : `Plan "${name}" saved ✓`, true);
+      showToast(editingPlanName ? `PROGRAM "${name}" UPDATED ✓` : `PROGRAM "${name}" SAVED ✓`, true);
       setView("existing-plans");
     } else {
-      showToast("Could not save plan", false);
+      showToast("COULD NOT SAVE PROGRAM — TRY AGAIN", false);
     }
     setSavingPlan(false);
   }, [planName, planSets, editingPlanName]);
@@ -590,9 +590,9 @@ export default function App() {
     const ok = await postToAppsScript({ type: "plan_delete", name });
     if (ok) {
       setSheetPlans(prev => prev.filter(p => p.name !== name));
-      showToast(`Plan "${name}" deleted`, true);
+      showToast(`PROGRAM "${name}" DELETED`, true);
     } else {
-      showToast("Could not delete plan", false);
+      showToast("COULD NOT DELETE PROGRAM — TRY AGAIN", false);
     }
   }, []);
 
@@ -621,7 +621,7 @@ export default function App() {
       return [...collapsedExisting, ...imported];
     });
     setShowImportPlan(false);
-    showToast(`Plan "${planName}" loaded — adjust kg/reps`, true);
+    showToast(`Plan "${planName}" loaded — ADJUST WEIGHT AND REPS`, true);
   }, [sheetPlans]);
 
   const [showImportPlan, setShowImportPlan] = useState(false);
@@ -678,9 +678,9 @@ export default function App() {
         }
         return r;
       }));
-      showToast("Set updated ✓", true);
+      showToast("SET UPDATED ✓", true);
     } else {
-      showToast("Could not update set", false);
+      showToast("COULD NOT UPDATE SET — TRY AGAIN", false);
     }
     setHistoryEditKey(null);
     setHistoryEditData(null);
@@ -728,7 +728,7 @@ export default function App() {
       .catch(err => {
         if (cancelled) return;
         console.error("Sheet fetch failed:", err);
-        setSheetError(err.message || "Could not load data from Google Sheets");
+        setSheetError(err.message || "COULD NOT LOAD DATA");
       })
       .finally(() => { if (!cancelled) setSheetLoading(false); });
     return () => { cancelled = true; };
@@ -748,11 +748,11 @@ export default function App() {
       setSheetPlans(plans || []);
       setSheetVideos(videos || []);
       setSheetError(null);
-      showToast(`${sets.length} sets loaded ✓`, true);
+      showToast(`${sets.length} SETS LOADED ✓`, true);
     } catch (err) {
       console.error(err);
       setSheetError(err.message || "Error");
-      showToast("Could not load from Sheets", false);
+      showToast("COULD NOT LOAD DATA", false);
     } finally {
       setSheetLoading(false);
     }
@@ -783,12 +783,12 @@ export default function App() {
       });
       setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepMin("8"); setNewExRepMax("12");
       setShowAddEx(false);
-      showToast(`"${name}" added ✓`, true);
+      showToast(`"${name}" ADDED ✓`, true);
     } else {
       setCustomExercises(p => [...p, name]);
       setNewExName(""); setNewExPrimary(""); setNewExSecondary(""); setNewExEquipment(""); setNewExRepMin("8"); setNewExRepMax("12");
       setShowAddEx(false);
-      showToast("Could not save to Sheets — local only", false);
+      showToast("⚠ ERROR WHILE SAVING · DATA SAVED LOCALLY", false);
     }
     setSavingEx(false);
   }, [newExName, newExPrimary, newExSecondary, newExEquipment, buildRepRange(newExRepMin, newExRepMax)]);
@@ -802,7 +802,7 @@ export default function App() {
       ));
       showToast(`Rep range updated for ${exName}`, true);
     } else {
-      showToast("Could not update rep range", false);
+      showToast("COULD NOT UPDATE REP RANGE — TRY AGAIN", false);
     }
   }, []);
 
@@ -831,12 +831,12 @@ export default function App() {
       setNewEqName("");
       setNewEqHandles("");
       setShowAddEq(false);
-      showToast(`"${name}" added ✓`, true);
+      showToast(`"${name}" ADDED ✓`, true);
     } else {
       setNewEqName("");
       setNewEqHandles("");
       setShowAddEq(false);
-      showToast("Could not save to Sheets", false);
+      showToast("⚠ ERROR · TRY AGAIN", false);
     }
     setSavingEq(false);
   }, [newEqName, newEqHandles]);
@@ -854,11 +854,11 @@ export default function App() {
       });
       setNewGymName("");
       setShowAddGym(false);
-      showToast(`"${name}" added ✓`, true);
+      showToast(`"${name}" ADDED ✓`, true);
     } else {
       setNewGymName("");
       setShowAddGym(false);
-      showToast("Could not save to Sheets", false);
+      showToast("⚠ ERROR · TRY AGAIN", false);
     }
     setSavingGym(false);
   }, [newGymName]);
@@ -1051,7 +1051,7 @@ export default function App() {
     if (invalid) {
       // Udfold det første ugyldige sæt så brugeren ser hvad der mangler
       setEntries(prev => prev.map(e => e.id === invalid.id ? { ...e, collapsed: false } : e));
-      showToast("Fill in exercise, kg and reps for all sets", false);
+      showToast("FILL IN EXERCISE, WEIGHT AND REPS FOR EACH SET", false);
       return;
     }
     setSaving(true);
@@ -1080,8 +1080,8 @@ export default function App() {
     setSaving(false);
     showToast(
       allOk
-        ? `${records.length} sets saved ✓`
-        : "Could not save to Sheets — saved locally",
+        ? `${records.length} SETS SAVED ✓`
+        : "⚠ ERROR · DATA IS ONLY SAVED LOCALLY",
       allOk
     );
   }, [entries, sessionDate, sessionCenter]);
@@ -1159,7 +1159,7 @@ export default function App() {
     });
     setShowImport(false);
     setImportDay("");
-    showToast(`${imported.length} sets imported — adjust kg/reps`, true);
+    showToast(`${imported.length} SETS DUPLICATED — ADJUST WEIGHT AND REPS`, true);
   }, [daysGrouped]);
 
   // ─── RENDER ────────────────────────────────────────────────────────────────
@@ -1170,7 +1170,7 @@ export default function App() {
       {/* Header */}
       <div style={S.header}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-          <div style={{...S.title, marginBottom:0}}>⚡ STYRKE TRACKER</div>
+          <div style={{...S.title, marginBottom:0}}>⚡ STRENGTH TRACKER</div>
           <div style={{ display:"flex", gap:6, alignItems:"center" }}>
             {/* Theme toggle */}
             <button
@@ -1201,12 +1201,12 @@ export default function App() {
                 ? "↻ LOADING..."
                 : sheetError
                   ? "⚠ ERROR · TRY AGAIN"
-                  : `↻ ${sheetData.length} SÆT`}
+                  : `↻ ${sheetData.length} SETS`}
             </button>
           </div>
         </div>
         <div style={S.nav}>
-          {[["log","LOG"],["resources","RESOURCES"],["plans","WORKOUT PLAN"],["history","HISTORY"],["insights","INSIGHTS"]].map(([k,l]) => (
+          {[["log","LOG WORKOUT"],["resources","RESOURCES"],["plans","PROGRAM"],["history","WORKOUT HISTORY"],["insights","INSIGHTS"]].map(([k,l]) => (
             <button key={k} style={S.navBtn(view===k || (k==="resources" && ["exercises","equipment","gyms"].includes(view)) || (k==="plans" && ["existing-plans","create-plan"].includes(view)))} onClick={() => setView(k === "resources" ? "exercises" : k === "plans" ? "existing-plans" : k)}>{l}</button>
           ))}
         </div>
@@ -1221,7 +1221,7 @@ export default function App() {
         {/* Sub-nav for WORKOUT PLAN */}
         {["existing-plans","create-plan"].includes(view) && (
           <div style={{...S.nav, marginTop:8, paddingLeft:8, borderLeft:"2px solid var(--accent-border)"}}>
-            {[["existing-plans","EXISTING PLANS"],["create-plan","CREATE PLAN"]].map(([k,l]) => (
+            {[["existing-plans","EXISTING PROGRAMS"],["create-plan","NEW PROGRAM"]].map(([k,l]) => (
               <button key={k} style={{...S.navBtn(view===k), fontSize:10}} onClick={() => setView(k)}>{l}</button>
             ))}
           </div>
@@ -1238,7 +1238,7 @@ export default function App() {
           <div style={{ fontWeight:600, marginBottom:4, color:"var(--error)" }}>Could not load data from Google Sheets</div>
           <div style={{ fontSize:10, color:"var(--error-muted)" }}>{sheetError}</div>
           <div style={{ fontSize:9, color:"var(--error-dim)", marginTop:6, letterSpacing:"0.05em" }}>
-            Check that Apps Script is deployed with "Anyone" access and that the URL in App.jsx is correct.
+            ⚠ ERROR WHILE FETCHING DATA
           </div>
         </div>
       )}
@@ -1292,7 +1292,7 @@ export default function App() {
               }}
               onClick={() => { setShowImport(s => !s); setShowImportPlan(false); }}
             >
-              {showImport ? "▲ CLOSE" : "↓ IMPORT SESSION"}
+              {showImport ? "▲ CLOSE" : "↓ DUPLICATE WORKOUT"}
             </button>
             <button
               style={{
@@ -1306,7 +1306,7 @@ export default function App() {
               }}
               onClick={() => { setShowImportPlan(s => !s); setShowImport(false); }}
             >
-              {showImportPlan ? "▲ CLOSE" : "↓ IMPORT PLAN"}
+              {showImportPlan ? "▲ CLOSE" : "↓ DUPLICATE PROGRAM"}
             </button>
           </div>
           {showImport && (
@@ -1366,7 +1366,7 @@ export default function App() {
 
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
             <div style={{...S.sectionTitle, marginBottom:0, border:"none", padding:0}}>
-              SESSION · {entries.length} {entries.length === 1 ? "set" : "sets"}
+              WORKOUT · {entries.length} {entries.length === 1 ? "SET" : "SETS"}
             </div>
             {entries.length > 1 && (
               <button
@@ -1376,7 +1376,7 @@ export default function App() {
                   return prev.map(e => ({ ...e, collapsed: !allCollapsed }));
                 })}
               >
-                {entries.every(e => e.collapsed) ? "Expand all" : "Collapse all"}
+                {entries.every(e => e.collapsed) ? "EXPAND ALL" : "COLLAPSE ALL"}
               </button>
             )}
           </div>
@@ -1504,14 +1504,14 @@ export default function App() {
                     {eBestOrm && (
                       <div style={S.orm}>
                         <div style={S.ormTitle}>BEST 1RM — {e.exercise} / {e.equipment}</div>
-                        {[[40,"Warm-up"],[60,"Light"],[80,"Working"]].map(([pct, label]) => (
+                        {[[40,"WARM-UP SET"],[60,"LIGHT SET"],[80,"WORKING SET"]].map(([pct, label]) => (
                           <div key={pct} style={S.ormRow}>
                             <span style={S.ormLabel}>{pct}% — {label}</span>
                             <span style={S.ormValue}>{Math.round(eBestOrm * pct / 100 * 2) / 2} kg</span>
                           </div>
                         ))}
                         <div style={{...S.ormRow, marginTop:6, borderTop:"1px solid var(--accent-border)", paddingTop:6}}>
-                          <span style={S.ormLabel}>Best 1RM</span>
+                          <span style={S.ormLabel}>BEST 1RM</span>
                           <span style={{...S.ormValue, fontSize:13}}>{eBestOrm} kg</span>
                         </div>
                       </div>
@@ -1519,7 +1519,7 @@ export default function App() {
 
                     <div style={{...S.grid2, margin:"10px 0"}}>
                       <div>
-                        <label style={S.label}>Kg</label>
+                        <label style={S.label}>WEIGHT</label>
                         <input type="number" style={S.input} placeholder="0" value={e.kg}
                           onChange={ev => updateEntry(e.id, { kg: ev.target.value })} />
                       </div>
@@ -1532,7 +1532,7 @@ export default function App() {
 
                     {eLiveOrm && (
                       <div style={{ fontSize:10, color:"var(--accent)", textAlign:"right", marginBottom:8, letterSpacing:"0.08em" }}>
-                        Est. 1RM: <strong>{eLiveOrm} kg</strong>
+                        ESTIMATED 1RM: <strong>{eLiveOrm} kg</strong>
                       </div>
                     )}
 
@@ -1610,7 +1610,7 @@ export default function App() {
                               </div>
                               <div style={{ marginBottom:4 }}>
                                 <label style={S.label}>NOTES</label>
-                                <input type="text" style={S.input} placeholder="Optional..." value={e.notes}
+                                <input type="text" style={S.input} placeholder="SET NOTES (OPTIONAL)" value={e.notes}
                                   onChange={ev => updateEntry(e.id, { notes: ev.target.value })} />
                               </div>
                             </div>
@@ -1684,7 +1684,7 @@ export default function App() {
       {view === "exercises" && (
         <div style={S.page}>
           <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-            <input style={{...S.input, flex:1}} placeholder="Search exercise..." value={exSearch}
+            <input style={{...S.input, flex:1}} placeholder="SEARCH EXERCISE…" value={exSearch}
               onChange={e => setExSearch(e.target.value)} />
             <button style={S.btnGhost} onClick={() => setShowAddEx(!showAddEx)}>+</button>
           </div>
@@ -1692,21 +1692,21 @@ export default function App() {
             <div style={{...S.card, marginBottom:10}}>
               <label style={S.label}>NEW EXERCISE</label>
               <input style={{...S.input, marginBottom:8}} value={newExName}
-                onChange={e => setNewExName(e.target.value)} placeholder="Name (e.g. BENCH PRESS)..." />
+                onChange={e => setNewExName(e.target.value)} placeholder="NAME (E.G. BENCH PRESS)" />
               <label style={S.label}>PRIMARY MUSCLE</label>
               <input style={{...S.input, marginBottom:8}} value={newExPrimary}
-                onChange={e => setNewExPrimary(e.target.value)} placeholder="e.g. CHEST" />
+                onChange={e => setNewExPrimary(e.target.value)} placeholder="E.G. CHEST" />
               <label style={S.label}>SECONDARY MUSCLES</label>
               <input style={{...S.input, marginBottom:8}} value={newExSecondary}
-                onChange={e => setNewExSecondary(e.target.value)} placeholder="e.g. TRICEPS, SHOULDERS (comma-separated)" />
+                onChange={e => setNewExSecondary(e.target.value)} placeholder="COMMA-SEPARATED — E.G. TRICEPS, SHOULDERS..." />
               <label style={S.label}>EQUIPMENT</label>
               <input style={{...S.input, marginBottom:8}} value={newExEquipment}
-                onChange={e => setNewExEquipment(e.target.value)} placeholder="e.g. BARBELL, DUMBBELLS (comma-separated)" />
+                onChange={e => setNewExEquipment(e.target.value)} placeholder="COMMA-SEPARATED — E.G. BARBELL, DUMBBELLS..." />
               <label style={S.label}>DEFAULT REP RANGE</label>
               <div style={{...S.grid2, marginBottom:8}}>
-                <input type="number" style={S.input} value={newExRepMin} placeholder="Min (e.g. 8)"
+                <input type="number" style={S.input} value={newExRepMin} placeholder="MINIMUM — E.G. 8"
                   onChange={e => setNewExRepMin(e.target.value)} />
-                <input type="number" style={S.input} value={newExRepMax} placeholder="Max (e.g. 12)"
+                <input type="number" style={S.input} value={newExRepMax} placeholder="MAXIMUM — E.G. 12"
                   onChange={e => setNewExRepMax(e.target.value)} />
               </div>
 
@@ -1760,12 +1760,12 @@ export default function App() {
                           <div style={{ marginBottom:12, padding:"8px 10px", background:"var(--accent-bg)", borderRadius:4, border:"1px solid var(--accent-border)" }}>
                             {m.primaryMuscle && (
                               <div style={{ fontSize:10, color:"var(--text-muted)", letterSpacing:"0.1em", marginBottom:4 }}>
-                                PRIMARY: <span style={{ color:"var(--accent)", fontWeight:600 }}>{m.primaryMuscle}</span>
+                                PRIMARY MUSCLES WORKED: <span style={{ color:"var(--accent)", fontWeight:600 }}>{m.primaryMuscle}</span>
                               </div>
                             )}
                             {m.secondaryMuscles && (
                               <div style={{ fontSize:10, color:"var(--text-muted)", letterSpacing:"0.1em" }}>
-                                SECONDARY: <span style={{ color:"var(--accent-dim)" }}>{m.secondaryMuscles}</span>
+                                SECONDARY MUSCLES WORKED: <span style={{ color:"var(--accent-dim)" }}>{m.secondaryMuscles}</span>
                               </div>
                             )}
                           </div>
@@ -1818,9 +1818,9 @@ export default function App() {
                                           const filtered = prev.filter(v => !(v.exercise === ex && v.equipment === eq && (v.handle||"") === h));
                                           return url ? [...filtered, { exercise: ex, equipment: eq, handle: h, url }] : filtered;
                                         });
-                                        showToast(url ? "Video saved ✓" : "Video removed", true);
+                                        showToast(url ? "VIDEO SAVED ✓" : "VIDEO REMOVED", true);
                                       } else {
-                                        showToast("Could not save video", false);
+                                        showToast("COULD NOT SAVE VIDEO — TRY AGAIN", false);
                                       }
                                     });
                                 }}
@@ -1870,7 +1870,7 @@ export default function App() {
       {view === "equipment" && (
         <div style={S.page}>
           <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-            <input style={{...S.input, flex:1}} placeholder="Search equipment..." value={eqSearch}
+            <input style={{...S.input, flex:1}} placeholder="SEARCH EQUIPMENT…" value={eqSearch}
               onChange={e => setEqSearch(e.target.value)} />
             <button style={S.btnGhost} onClick={() => setShowAddEq(!showAddEq)}>+</button>
           </div>
@@ -1878,10 +1878,10 @@ export default function App() {
             <div style={{...S.card, marginBottom:10}}>
               <label style={S.label}>NEW EQUIPMENT</label>
               <input style={{...S.input, marginBottom:8}} value={newEqName}
-                onChange={e => setNewEqName(e.target.value)} placeholder="Name (e.g. Lat Pulldown Machine)..." />
+                onChange={e => setNewEqName(e.target.value)} placeholder="NAME — E.G. LAT PULLDOWN MACHINE" />
               <label style={S.label}>HANDLES / GRIPS (optional)</label>
               <input style={{...S.input, marginBottom:10}} value={newEqHandles}
-                onChange={e => setNewEqHandles(e.target.value)} placeholder="Comma-separated, e.g. WIDE, NEUTRAL, CLOSE" />
+                onChange={e => setNewEqHandles(e.target.value)} placeholder="COMMA-SEPARATED — E.G. WIDE GRIP, ROPE, V-BAR..." />
               <div style={{ display:"flex", gap:8 }}>
                 <button
                   style={{...S.btn, flex:1, opacity: savingEq ? 0.6 : 1}}
@@ -1938,7 +1938,7 @@ export default function App() {
                               <div style={{ background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:4, padding:"8px 10px", marginBottom:8 }}>
                                 <input style={{...S.input, marginBottom:6}} value={newHandleName}
                                   onChange={(ev) => setNewHandleName(ev.target.value)}
-                                  placeholder="e.g. ROPE, WIDE GRIP, V-BAR..." />
+                                  placeholder="COMMA-SEPARATED — E.G. WIDE GRIP, ROPE, V-BAR..." />
                                 <div style={{ display:"flex", gap:6 }}>
                                   <button style={{...S.btn, flex:1, fontSize:10, padding:"6px"}}
                                     disabled={savingHandle || !newHandleName.trim()}
@@ -1989,7 +1989,7 @@ export default function App() {
                       )}
                       <button style={{...S.btn, width:"100%", fontSize:10}}
                         onClick={() => { setEntry(p => ({...p, equipment: eq})); setView("log"); setExpandedEq(null); }}>
-                        Log set with {eq} →
+                        LOG SET WITH {eq} →
                       </button>
                     </div>
                   )}
@@ -2003,7 +2003,7 @@ export default function App() {
       {view === "gyms" && (
         <div style={S.page}>
           <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-            <input style={{...S.input, flex:1}} placeholder="Search gym..." value={gymSearch}
+            <input style={{...S.input, flex:1}} placeholder="SEARCH GYM…" value={gymSearch}
               onChange={e => setGymSearch(e.target.value)} />
             <button style={S.btnGhost} onClick={() => setShowAddGym(!showAddGym)}>+</button>
           </div>
@@ -2011,7 +2011,7 @@ export default function App() {
             <div style={{...S.card, marginBottom:10}}>
               <label style={S.label}>NEW GYM</label>
               <input style={{...S.input, marginBottom:10}} value={newGymName}
-                onChange={e => setNewGymName(e.target.value)} placeholder="Name (e.g. SATS NØRREBRO)..." />
+                onChange={e => setNewGymName(e.target.value)} placeholder="NAME — E.G. FITNESS ADELGADE" />
               <div style={{ display:"flex", gap:8 }}>
                 <button
                   style={{...S.btn, flex:1, opacity: savingGym ? 0.6 : 1}}
@@ -2056,7 +2056,7 @@ export default function App() {
       {view === "existing-plans" && (
         <div style={S.page}>
           <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-            <input style={{...S.input, flex:1}} placeholder="Search plans..." value={planSearch}
+            <input style={{...S.input, flex:1}} placeholder="SEARCH PROGRAMS…" value={planSearch}
               onChange={e => setPlanSearch(e.target.value)} />
             <button style={S.btnGhost} onClick={() => {
               setEditingPlanName(null);
@@ -2110,7 +2110,7 @@ export default function App() {
                       <div style={{ display:"flex", gap:8, marginTop:10 }}>
                         <button style={{...S.btn, flex:1, fontSize:10}}
                           onClick={() => { importPlan(plan.name); setView("log"); setExpandedPlan(null); }}>
-                          IMPORT TO LOG →
+                          DUPLICATE TO WORKOUT LOG →
                         </button>
                         <button style={{...S.btnGhost, fontSize:10}}
                           onClick={() => {
@@ -2153,16 +2153,16 @@ export default function App() {
       {view === "create-plan" && (
         <div style={S.page}>
           <div style={{...S.card, padding:"10px 14px", marginBottom:10}}>
-            <label style={S.label}>PLAN NAME</label>
+            <label style={S.label}>PROGRAM NAME</label>
             <input style={S.input} value={planName} onChange={e => setPlanName(e.target.value)}
-              placeholder="e.g. Push Day A" />
+              placeholder="E.G. PUSH DAY A" />
           </div>
 
           {/* Import session som udgangspunkt for planen */}
           <div style={{ marginBottom:10 }}>
             <button style={{...S.btnGhost, width:"100%", padding:"9px", fontSize:10, letterSpacing:"0.08em"}}
               onClick={() => setShowImportSessionToPlan(p => !p)}>
-              {showImportSessionToPlan ? "▲ CLOSE" : "↓ IMPORT SESSION AS STARTING POINT"}
+              {showImportSessionToPlan ? "▲ CLOSE" : "↓ DUPLICATE EARLIER WORKOUT AS STARTING POINT"}
             </button>
             {showImportSessionToPlan && (
               <div style={{...S.card, marginTop:6}}>
@@ -2200,7 +2200,7 @@ export default function App() {
           </div>
 
           <div style={{ fontSize:10, color:"var(--text-dim)", marginBottom:6, letterSpacing:"0.08em" }}>
-            PLAN · {planSets.length} {planSets.length === 1 ? "set" : "sets"}
+            PROGRAM · {planSets.length} {planSets.length === 1 ? "set" : "sets"}
           </div>
 
           {planSets.map((s, idx) => {
@@ -2279,10 +2279,10 @@ export default function App() {
                   <label style={S.label}>REP RANGE</label>
                   <div style={S.grid2}>
                     <input type="number" style={S.input}
-                      value={parseRepRange(s.repsGoal).min} placeholder="Min"
+                      value={parseRepRange(s.repsGoal).min} placeholder="MINIMUM"
                       onChange={ev => updatePlanSet(s.id, { repsGoal: buildRepRange(ev.target.value, parseRepRange(s.repsGoal).max) })} />
                     <input type="number" style={S.input}
-                      value={parseRepRange(s.repsGoal).max} placeholder="Max"
+                      value={parseRepRange(s.repsGoal).max} placeholder="MAXIMUM"
                       onChange={ev => updatePlanSet(s.id, { repsGoal: buildRepRange(parseRepRange(s.repsGoal).min, ev.target.value) })} />
                   </div>
                 </div>
@@ -2295,7 +2295,7 @@ export default function App() {
                 </div>
                 <div>
                   <label style={S.label}>NOTES</label>
-                  <input type="text" style={S.input} placeholder="Optional..." value={s.notes}
+                  <input type="text" style={S.input} placeholder="SET NOTES (OPTIONAL)" value={s.notes}
                     onChange={ev => updatePlanSet(s.id, { notes: ev.target.value })} />
                 </div>
               </div>
@@ -2311,11 +2311,11 @@ export default function App() {
           {editingPlanName && (
             <div style={{ background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:8, padding:"10px 12px", marginBottom:10 }}>
               <div style={{ fontSize:10, color:"var(--accent-dim)", letterSpacing:"0.1em" }}>
-                EDITING: <span style={{ color:"var(--accent)", fontWeight:600 }}>{editingPlanName}</span>
+                EDITING PROGRAM: <span style={{ color:"var(--accent)", fontWeight:600 }}>{editingPlanName}</span>
               </div>
               {planName.trim() !== editingPlanName && planName.trim() && (
                 <div style={{ fontSize:9, color:"var(--text-muted)", marginTop:3 }}>
-                  Will be renamed to "{planName.trim()}"
+                  PROGRAM WILL BE RENAMED TO "{planName.trim()}"
                 </div>
               )}
             </div>
@@ -2327,7 +2327,7 @@ export default function App() {
               onClick={handleSavePlan}
               disabled={savingPlan || !planName.trim()}
             >
-              {savingPlan ? "SAVING..." : editingPlanName ? "SAVE CHANGES" : "SAVE PLAN"}
+              {savingPlan ? "SAVING..." : editingPlanName ? "SAVE CHANGES" : "SAVE PROGRAM"}
             </button>
             {editingPlanName && (
               <button
@@ -2454,7 +2454,7 @@ export default function App() {
                               <div style={{ background:"var(--surface-2, var(--accent-bg))", borderRadius:8, padding:10 }}>
                                 <div style={S.grid2}>
                                   <div>
-                                    <label style={S.label}>Kg</label>
+                                    <label style={S.label}>WEIGHT</label>
                                     <input type="number" style={S.input} value={historyEditData.kg || ""}
                                       onChange={ev => setHistoryEditData(p => ({...p, kg: ev.target.value}))} />
                                   </div>
@@ -2602,7 +2602,7 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
 
   if (!records.length) return (
     <div style={{ color:"var(--text-faint)", fontSize:12, textAlign:"center", marginTop:40 }}>
-      No data for {exercise}
+      NO DATA FOR {exercise}
     </div>
   );
 
@@ -2661,7 +2661,7 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
             {best && (
               <div style={{ background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:8, padding:"10px 12px", marginBottom:10 }}>
                 <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.12em", marginBottom:6 }}>BEST 1RM: {best} kg</div>
-                {[[40,"Warm-up"],[60,"Light"],[80,"Working"]].map(([pct, label]) => (
+                {[[40,"WARM-UP SET"],[60,"LIGHT SET"],[80,"WORKING SET"]].map(([pct, label]) => (
                   <div key={pct} style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
                     <span style={{ fontSize:10, color:"var(--text-label)" }}>{pct}% — {label}</span>
                     <span style={{ fontSize:11, color:"var(--accent)", fontWeight:600 }}>{Math.round(best * pct / 100 * 2) / 2} kg</span>
@@ -2687,7 +2687,7 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
                 <button
                   style={{ background:"none", border:"none", cursor:"pointer", width:"100%", padding:"8px 0", fontSize:10, color:"var(--text-dim)", fontFamily:"'DM Mono', monospace", letterSpacing:"0.08em" }}
                   onClick={() => setShowAllKey(prev => ({ ...prev, [groupKey]: !prev[groupKey] }))}>
-                  {showAll ? "▲ SHOW LESS" : `▼ SHOW ALL ${recs.length} SESSIONS`}
+                  {showAll ? "▲ SHOW LESS" : `▼ SHOW ALL ${recs.length} WORKOUTS`}
                 </button>
               )}
             </div>
@@ -2742,14 +2742,14 @@ function RepRangeEditor({ initialValue, onSave }) {
         <input
           type="number"
           style={{ flex:1, background:"var(--bg)", border:`1px solid ${changed ? "var(--accent-border)" : "var(--border-input)"}`, borderRadius:6, padding:"7px 10px", color:"var(--text-primary)", fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box", outline:"none" }}
-          value={min} placeholder="Min" min={1}
+          value={min} placeholder="MINIMUM" min={1}
           onChange={e => setMin(e.target.value)}
         />
         <span style={{ fontSize:12, color:"var(--text-muted)", flexShrink:0 }}>–</span>
         <input
           type="number"
           style={{ flex:1, background:"var(--bg)", border:`1px solid ${changed ? "var(--accent-border)" : "var(--border-input)"}`, borderRadius:6, padding:"7px 10px", color:"var(--text-primary)", fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box", outline:"none" }}
-          value={max} placeholder="Max" min={1}
+          value={max} placeholder="MAXIMUM" min={1}
           onChange={e => setMax(e.target.value)}
         />
         {changed && (
@@ -2767,7 +2767,7 @@ function RepRangeEditor({ initialValue, onSave }) {
       </div>
       {currentValue && !changed && (
         <div style={{ fontSize:9, color:"var(--text-muted)", marginTop:4, letterSpacing:"0.05em" }}>
-          {currentValue} reps — saved ✓
+          {currentValue} REPS — SAVED ✓
         </div>
       )}
       {!currentValue && (
@@ -2789,7 +2789,7 @@ function VideoRow({ exercise, equipment, handle, existingUrl, onSave }) {
   // Label: "CABLE TOWER · ROPE", "CABLE TOWER", eller "General"
   const label = equipment
     ? (handle ? `${equipment} · ${handle}` : equipment)
-    : "General (no equipment)";
+    : "GENERIC (NO EQUIPMENT)";
 
   const embedUrl = getYouTubeEmbedUrl(url || existingUrl || "");
   const savedUrl = existingUrl || "";
@@ -2808,7 +2808,7 @@ function VideoRow({ exercise, equipment, handle, existingUrl, onSave }) {
             fontFamily:"'DM Mono', monospace", fontSize:11, boxSizing:"border-box", outline:"none" }}
           value={url}
           onChange={e => setUrl(e.target.value)}
-          placeholder="https://youtube.com/..."
+          placeholder="INSERT VIDEO-URL HERE"
         />
         {changed && (
           <button
