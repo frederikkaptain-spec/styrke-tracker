@@ -514,6 +514,7 @@ export default function App() {
     repsGoal: "8-10", setType: "NORMAL SET", notes: "",
   }]);
   const [savingPlan, setSavingPlan] = useState(false);
+  const [editingPlanName, setEditingPlanName] = useState(null); // null = ny plan, string = navn på plan der redigeres
 
   const newPlanSetId = () => `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const updatePlanSet = useCallback((id, updates) => {
@@ -550,61 +551,39 @@ export default function App() {
 
   const handleSavePlan = useCallback(async () => {
     const name = planName.trim();
-    if (!name) {
-      showToast("Plan needs a name", false);
-      return;
-    }
+    if (!name) { showToast("Plan needs a name", false); return; }
     const validSets = planSets.filter(s => s.exercise);
-    if (!validSets.length) {
-      showToast("Plan needs at least one set", false);
-      return;
-    }
+    if (!validSets.length) { showToast("Plan needs at least one set", false); return; }
     setSavingPlan(true);
-    // Send plan as JSON
-    const ok = await postToAppsScript({
-      type: "plan_save",
-      name,
-      sets: validSets.map((s, i) => ({
-        order: i + 1,
-        exercise: s.exercise,
-        equipment: s.equipment,
-        handle: s.handle || "",
-        kg: s.kg || "",
-        reps: s.reps || "",
-        repsGoal: s.repsGoal || "",
-        setType: s.setType || "NORMAL SET",
-        notes: s.notes || "",
-      })),
-    });
+
+    // Hvis vi redigerer og har omdøbt planen — slet den gamle
+    if (editingPlanName && editingPlanName !== name) {
+      await postToAppsScript({ type: "plan_delete", name: editingPlanName });
+      setSheetPlans(prev => prev.filter(p => p.name !== editingPlanName));
+    }
+
+    const setsPayload = validSets.map((s, i) => ({
+      order: i + 1,
+      exercise: s.exercise, equipment: s.equipment, handle: s.handle || "",
+      kg: s.kg || "", reps: s.reps || "", repsGoal: s.repsGoal || "",
+      setType: s.setType || "NORMAL SET", notes: s.notes || "",
+    }));
+    const ok = await postToAppsScript({ type: "plan_save", name, sets: setsPayload });
     if (ok) {
       setSheetPlans(prev => {
-        const filtered = prev.filter(p => p.name !== name);
-        return [...filtered, { name, sets: validSets.map((s, i) => ({
-          order: i + 1,
-          exercise: s.exercise,
-          equipment: s.equipment,
-          handle: s.handle || "",
-          kg: s.kg || "",
-          reps: s.reps || "",
-          repsGoal: s.repsGoal || "",
-          setType: s.setType || "NORMAL SET",
-          notes: s.notes || "",
-        })) }];
+        const filtered = prev.filter(p => p.name !== name && p.name !== editingPlanName);
+        return [...filtered, { name, sets: setsPayload }];
       });
       setPlanName("");
-      setPlanSets([{
-        id: newPlanSetId(),
-        exercise: "", equipment: "", handle: "",
-        kg: "", reps: "",
-        repsGoal: "8-10", setType: "NORMAL SET", notes: "",
-      }]);
-      showToast(`Plan "${name}" saved ✓`, true);
+      setPlanSets([{ id: newPlanSetId(), exercise: "", equipment: "", handle: "", kg: "", reps: "", repsGoal: "8-10", setType: "NORMAL SET", notes: "" }]);
+      setEditingPlanName(null);
+      showToast(editingPlanName ? `Plan "${name}" updated ✓` : `Plan "${name}" saved ✓`, true);
       setView("existing-plans");
     } else {
       showToast("Could not save plan", false);
     }
     setSavingPlan(false);
-  }, [planName, planSets]);
+  }, [planName, planSets, editingPlanName]);
 
   const handleDeletePlan = useCallback(async (name) => {
     if (!confirm(`Delete plan "${name}"?`)) return;
@@ -1792,32 +1771,13 @@ export default function App() {
                           </div>
                         );
                       })()}
-                      {/* Default rep range (kan ændres) */}
+                      {/* Default rep range — lokal state, gem med knap */}
                       <div style={{ marginBottom:10 }}>
                         <label style={S.label}>DEFAULT REP RANGE</label>
-                        <div style={S.grid2}>
-                          <input type="number" style={S.input}
-                            value={parseRepRange((exerciseMuscleMap[ex] && exerciseMuscleMap[ex].defaultRepRange) || "").min}
-                            placeholder="Min"
-                            onChange={ev => {
-                              const cur = (exerciseMuscleMap[ex] && exerciseMuscleMap[ex].defaultRepRange) || "";
-                              const max = parseRepRange(cur).max;
-                              handleUpdateRepRange(ex, buildRepRange(ev.target.value, max));
-                            }}
-                          />
-                          <input type="number" style={S.input}
-                            value={parseRepRange((exerciseMuscleMap[ex] && exerciseMuscleMap[ex].defaultRepRange) || "").max}
-                            placeholder="Max"
-                            onChange={ev => {
-                              const cur = (exerciseMuscleMap[ex] && exerciseMuscleMap[ex].defaultRepRange) || "";
-                              const min = parseRepRange(cur).min;
-                              handleUpdateRepRange(ex, buildRepRange(min, ev.target.value));
-                            }}
-                          />
-                        </div>
-                        <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:4, letterSpacing:"0.05em" }}>
-                          Used as default when logging this exercise.
-                        </div>
+                        <RepRangeEditor
+                          initialValue={(exerciseMuscleMap[ex] && exerciseMuscleMap[ex].defaultRepRange) || ""}
+                          onSave={newRange => handleUpdateRepRange(ex, newRange)}
+                        />
                       </div>
                       {/* Video URLs — pr. (redskab + handle) */}
                       <div style={{ marginBottom:10 }}>
@@ -2098,7 +2058,16 @@ export default function App() {
           <div style={{ display:"flex", gap:8, marginBottom:12 }}>
             <input style={{...S.input, flex:1}} placeholder="Search plans..." value={planSearch}
               onChange={e => setPlanSearch(e.target.value)} />
-            <button style={S.btnGhost} onClick={() => setView("create-plan")}>+ NEW</button>
+            <button style={S.btnGhost} onClick={() => {
+              setEditingPlanName(null);
+              setPlanName("");
+              setPlanSets([{
+                id: `p_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+                exercise: "", equipment: "", handle: "",
+                kg: "", reps: "", repsGoal: "8-10", setType: "NORMAL SET", notes: "",
+              }]);
+              setView("create-plan");
+            }}>+ NEW</button>
           </div>
           {sheetPlans
             .filter(p => !planSearch || p.name.toLowerCase().includes(planSearch.toLowerCase()))
@@ -2145,8 +2114,8 @@ export default function App() {
                         </button>
                         <button style={{...S.btnGhost, fontSize:10}}
                           onClick={() => {
-                            // Load plan ind i CREATE PLAN form
                             setPlanName(plan.name);
+                            setEditingPlanName(plan.name); // marker at vi redigerer
                             setPlanSets((plan.sets || [])
                               .sort((a, b) => (a.order || 0) - (b.order || 0))
                               .map(s => ({
@@ -2338,13 +2307,42 @@ export default function App() {
             + ADD SET
           </button>
 
-          <button
-            style={{...S.btn, width:"100%", marginBottom:10, opacity: savingPlan || !planName.trim() ? 0.6 : 1}}
-            onClick={handleSavePlan}
-            disabled={savingPlan || !planName.trim()}
-          >
-            {savingPlan ? "SAVING..." : `SAVE PLAN`}
-          </button>
+          {/* Tydelig edit-indikator + gem/annuller */}
+          {editingPlanName && (
+            <div style={{ background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:8, padding:"10px 12px", marginBottom:10 }}>
+              <div style={{ fontSize:10, color:"var(--accent-dim)", letterSpacing:"0.1em" }}>
+                EDITING: <span style={{ color:"var(--accent)", fontWeight:600 }}>{editingPlanName}</span>
+              </div>
+              {planName.trim() !== editingPlanName && planName.trim() && (
+                <div style={{ fontSize:9, color:"var(--text-muted)", marginTop:3 }}>
+                  Will be renamed to "{planName.trim()}"
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+            <button
+              style={{...S.btn, flex:1, opacity: savingPlan || !planName.trim() ? 0.6 : 1}}
+              onClick={handleSavePlan}
+              disabled={savingPlan || !planName.trim()}
+            >
+              {savingPlan ? "SAVING..." : editingPlanName ? "SAVE CHANGES" : "SAVE PLAN"}
+            </button>
+            {editingPlanName && (
+              <button
+                style={S.btnGhost}
+                onClick={() => {
+                  setEditingPlanName(null);
+                  setPlanName("");
+                  setPlanSets([{ id: newPlanSetId(), exercise: "", equipment: "", handle: "", kg: "", reps: "", repsGoal: "8-10", setType: "NORMAL SET", notes: "" }]);
+                  setView("existing-plans");
+                }}
+              >
+                CANCEL
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -2724,6 +2722,60 @@ function ProgressChart({ records }) {
       <text x={pts[0].x} y={H - 2} textAnchor="middle" fill="var(--text-dim)" fontSize={7} fontFamily="DM Mono, monospace">{toDisplay(pts[0].date)?.slice(-5)}</text>
       <text x={pts[pts.length-1].x} y={H - 2} textAnchor="middle" fill="var(--text-dim)" fontSize={7} fontFamily="DM Mono, monospace">{toDisplay(pts[pts.length-1].date)?.slice(-5)}</text>
     </svg>
+  );
+}
+
+// ─── REP RANGE EDITOR ─────────────────────────────────────────────────────────
+// Lokal state + eksplicit gem-knap — sender ingen API-kald ved hvert tastetryk
+function RepRangeEditor({ initialValue, onSave }) {
+  const parsed = parseRepRange(initialValue);
+  const [min, setMin] = useState(parsed.min);
+  const [max, setMax] = useState(parsed.max);
+  const [saving, setSaving] = useState(false);
+
+  const currentValue = buildRepRange(min, max);
+  const changed = currentValue !== (initialValue || "");
+
+  return (
+    <div>
+      <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+        <input
+          type="number"
+          style={{ flex:1, background:"var(--bg)", border:`1px solid ${changed ? "var(--accent-border)" : "var(--border-input)"}`, borderRadius:6, padding:"7px 10px", color:"var(--text-primary)", fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box", outline:"none" }}
+          value={min} placeholder="Min" min={1}
+          onChange={e => setMin(e.target.value)}
+        />
+        <span style={{ fontSize:12, color:"var(--text-muted)", flexShrink:0 }}>–</span>
+        <input
+          type="number"
+          style={{ flex:1, background:"var(--bg)", border:`1px solid ${changed ? "var(--accent-border)" : "var(--border-input)"}`, borderRadius:6, padding:"7px 10px", color:"var(--text-primary)", fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box", outline:"none" }}
+          value={max} placeholder="Max" min={1}
+          onChange={e => setMax(e.target.value)}
+        />
+        {changed && (
+          <button
+            style={{ background:"var(--accent)", color:"var(--bg)", border:"none", borderRadius:6, padding:"7px 14px", fontSize:10, fontWeight:700, cursor:"pointer", fontFamily:"'DM Mono', monospace", letterSpacing:"0.08em", opacity: saving ? 0.6 : 1, flexShrink:0 }}
+            disabled={saving}
+            onClick={async () => {
+              setSaving(true);
+              await onSave(currentValue);
+              setSaving(false);
+            }}>
+            {saving ? "…" : "SAVE"}
+          </button>
+        )}
+      </div>
+      {currentValue && !changed && (
+        <div style={{ fontSize:9, color:"var(--text-muted)", marginTop:4, letterSpacing:"0.05em" }}>
+          {currentValue} reps — saved ✓
+        </div>
+      )}
+      {!currentValue && (
+        <div style={{ fontSize:9, color:"var(--text-faint)", marginTop:4, letterSpacing:"0.05em" }}>
+          Used as default when logging this exercise.
+        </div>
+      )}
+    </div>
   );
 }
 
