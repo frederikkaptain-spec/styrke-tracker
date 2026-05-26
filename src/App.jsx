@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwZJAREnQzsBqGeo0BF9Pk0Y4s66_of9tF5tvyYRibITyU7E8HrKonABjTRrVkaGrw4/exec";
+const APPS_SCRIPT_URL = "REPLACE_WITH_YOUR_APPS_SCRIPT_URL";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
@@ -325,13 +325,13 @@ const S = {
   input: {
     width:"100%", background:"var(--bg)", border:"1px solid var(--border-input)",
     borderRadius:6, padding:"8px 10px", color:"var(--text-primary)",
-    fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box",
+    fontFamily:"'DM Mono', monospace", fontSize:16, boxSizing:"border-box",
     outline:"none",
   },
   select: {
     width:"100%", background:"var(--bg)", border:"1px solid var(--border-input)",
     borderRadius:6, padding:"8px 10px", color:"var(--text-primary)",
-    fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box",
+    fontFamily:"'DM Mono', monospace", fontSize:16, boxSizing:"border-box",
   },
   btn: {
     background:"var(--accent)", color:"var(--bg)", border:"none", borderRadius:6,
@@ -417,10 +417,20 @@ export default function App() {
   const [sheetLoading, setSheetLoading] = useState(true);
   const [sheetError, setSheetError] = useState(null);
 
-  // LOG state — multi-sæt session builder
+  // LOG state — multi-sæt session builder med auto-save draft
   const today = todayISO();
-  const [sessionDate, setSessionDate] = useState(today);
-  const [sessionCenter, setSessionCenter] = useState(""); // valgfri — kan være tom
+
+  // Hjælpefunktion til at læse draft
+  const getDraft = () => {
+    try {
+      const d = JSON.parse(localStorage.getItem('st-draft') || 'null');
+      // Brug kun draft hvis det er fra i dag
+      return (d && d.sessionDate === todayISO()) ? d : null;
+    } catch(e) { return null; }
+  };
+
+  const [sessionDate, setSessionDate] = useState(() => getDraft()?.sessionDate || today);
+  const [sessionCenter, setSessionCenter] = useState(() => getDraft()?.sessionCenter || "");
   const newSetId = () => `s_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const blankEntry = () => ({
     id: newSetId(),
@@ -428,10 +438,23 @@ export default function App() {
     repsGoal: "8-10", setType: "NORMAL SET", notes: "",
     collapsed: false, showExtras: false, showVideo: false,
   });
-  const [entries, setEntries] = useState([blankEntry()]);
+  const [entries, setEntries] = useState(() => {
+    const draft = getDraft();
+    return (draft?.entries?.length > 0) ? draft.entries : [blankEntry()];
+  });
   const [saving, setSaving] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [importDay, setImportDay] = useState("");
+
+  // Auto-save draft til localStorage ved enhver ændring af session
+  useEffect(() => {
+    try {
+      const hasData = entries.some(e => e.exercise || e.kg || e.reps);
+      if (hasData) {
+        localStorage.setItem('st-draft', JSON.stringify({ sessionDate, sessionCenter, entries }));
+      }
+    } catch(e) {}
+  }, [entries, sessionDate, sessionCenter]);
 
   // Helper: opdater et enkelt sæt by id
   const updateEntry = useCallback((id, patch) => {
@@ -1078,6 +1101,8 @@ export default function App() {
       setType: last.setType,
     }]);
     setSaving(false);
+    // Ryd draft efter vellykket gem
+    try { localStorage.removeItem('st-draft'); } catch(e) {}
     showToast(
       allOk
         ? `${records.length} SETS SAVED ✓`
@@ -1246,6 +1271,24 @@ export default function App() {
       {/* ── LOG (multi-set session builder) ── */}
       {view === "log" && (
         <div style={S.page}>
+          {/* Draft-indikator: vises når der er et auto-gemt draft */}
+          {entries.some(e => e.exercise || e.kg || e.reps) && (
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 10px", marginBottom:8, background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:6 }}>
+              <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.08em" }}>
+                DRAFT AUTO-SAVED · {entries.filter(e => e.exercise).length} SET{entries.filter(e => e.exercise).length !== 1 ? "S" : ""}
+              </div>
+              <button
+                style={{ background:"none", border:"none", cursor:"pointer", fontSize:9, color:"var(--text-faint)", fontFamily:"'DM Mono', monospace", letterSpacing:"0.06em", padding:"2px 4px" }}
+                onClick={() => {
+                  setEntries([blankEntry()]);
+                  setSessionDate(todayISO());
+                  setSessionCenter("");
+                  try { localStorage.removeItem('st-draft'); } catch(e) {}
+                }}>
+                CLEAR ✕
+              </button>
+            </div>
+          )}
           {/* Session: date + gym — applies to all sets */}
           <div style={{...S.card, padding:"12px 14px", marginBottom:10}}>
             <div style={S.grid2}>
@@ -1387,6 +1430,18 @@ export default function App() {
             const eEquipForExercise = getEquipForExercise(e.exercise);
             const isComplete = e.exercise && e.kg && e.reps;
 
+            // Badge-label: DROP SET viser kun type, andre viser "N TYPE"
+            const setTypeCounts = {};
+            for (let i = 0; i <= idx; i++) {
+              const t = entries[i].setType || "NORMAL SET";
+              setTypeCounts[t] = (setTypeCounts[t] || 0) + 1;
+            }
+            const thisType = e.setType || "NORMAL SET";
+            const typeCount = setTypeCounts[thisType];
+            const badgeLabel = thisType === "DROP SET"
+              ? "DROP SET"
+              : `${typeCount} ${thisType}`;
+
             return (
               <div key={e.id} style={S.card}>
                 {/* Header: altid synlig — klikbar for at toggle collapse */}
@@ -1400,11 +1455,11 @@ export default function App() {
                 >
                   <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0, flex:1 }}>
                     <span style={{
-                      fontSize:9, color:"var(--accent)", letterSpacing:"0.15em",
+                      fontSize:9, color:"var(--accent)", letterSpacing:"0.12em",
                       background:"var(--accent-bg-mid)", padding:"3px 7px", borderRadius:4, fontWeight:600,
-                      flexShrink:0,
+                      flexShrink:0, whiteSpace:"nowrap",
                     }}>
-                      SÆT {idx + 1}
+                      {badgeLabel}
                     </span>
                     {e.collapsed ? (
                       // Kompakt overblik når collapsed
@@ -1417,11 +1472,6 @@ export default function App() {
                             <span style={{ color:"var(--accent)", fontWeight:600, whiteSpace:"nowrap" }}>
                               {e.kg}×{e.reps}
                             </span>
-                            {eLiveOrm && (
-                              <span style={{ color:"var(--text-faint)", fontSize:10, whiteSpace:"nowrap" }}>
-                                1RM ~{eLiveOrm}
-                              </span>
-                            )}
                           </div>
                         ) : (
                           <div style={{ fontSize:11, color:"var(--text-label)", fontStyle:"italic" }}>
@@ -1431,7 +1481,7 @@ export default function App() {
                       </div>
                     ) : (
                       <div style={{ fontSize:11, color:"var(--text-dim)" }}>
-                        {isComplete ? "Udfyldt" : "Udfyld felter ↓"}
+                        {isComplete ? "Filled" : "Fill fields ↓"}
                       </div>
                     )}
                   </div>
@@ -1500,23 +1550,6 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* 1RM guide */}
-                    {eBestOrm && (
-                      <div style={S.orm}>
-                        <div style={S.ormTitle}>BEST 1RM — {e.exercise} / {e.equipment}</div>
-                        {[[40,"WARM-UP SET"],[60,"LIGHT SET"],[80,"WORKING SET"]].map(([pct, label]) => (
-                          <div key={pct} style={S.ormRow}>
-                            <span style={S.ormLabel}>{pct}% — {label}</span>
-                            <span style={S.ormValue}>{Math.round(eBestOrm * pct / 100 * 2) / 2} kg</span>
-                          </div>
-                        ))}
-                        <div style={{...S.ormRow, marginTop:6, borderTop:"1px solid var(--accent-border)", paddingTop:6}}>
-                          <span style={S.ormLabel}>BEST 1RM</span>
-                          <span style={{...S.ormValue, fontSize:13}}>{eBestOrm} kg</span>
-                        </div>
-                      </div>
-                    )}
-
                     <div style={{...S.grid2, margin:"10px 0"}}>
                       <div>
                         <label style={S.label}>WEIGHT</label>
@@ -1536,7 +1569,7 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* REP RANGE er read-only her — defineret pr. øvelse i EXERCISE-fanen, eller pr. sæt i workout plan */}
+                    {/* REP RANGE read-only */}
                     {e.repsGoal && (
                       <div style={{ marginBottom:10, padding:"6px 10px", background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:4 }}>
                         <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.1em" }}>
@@ -1545,24 +1578,29 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* SET TYPE + NOTES som kollapsbar sektion */}
+                    {/* SET TYPE — altid synlig */}
+                    <div style={{ marginBottom:10 }}>
+                      <label style={S.label}>SET TYPE</label>
+                      <select style={S.select} value={e.setType}
+                        onChange={ev => updateEntry(e.id, { setType: ev.target.value })}>
+                        {SET_TYPES.map(t => <option key={t}>{t}</option>)}
+                      </select>
+                    </div>
+
+                    {/* NOTES + 1RM guide + video under ⋯ MORE */}
                     {(() => {
-                      const hasExtra = e.setType !== "NORMAL SET" || e.notes;
+                      const hasExtra = e.notes;
                       const videoUrl = getVideoUrl(e.exercise, e.equipment, e.handle);
                       return (
                         <>
-                          <div style={{ display:"flex", gap:6, marginBottom: e.showExtras ? 10 : 0, flexWrap:"wrap" }}>
-                            {/* Set type badge — vis altid hvis ikke NORMAL SET */}
-                            {e.setType !== "NORMAL SET" && (
-                              <span style={{ ...S.tagGreen, fontSize:9, padding:"3px 8px" }}>{e.setType}</span>
-                            )}
+                          <div style={{ display:"flex", gap:6, marginBottom: e.showExtras ? 10 : 0, flexWrap:"wrap", alignItems:"center" }}>
                             {/* Notes badge */}
                             {e.notes && (
                               <span style={{ ...S.tag, fontSize:9, maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                                 📝 {e.notes}
                               </span>
                             )}
-                            {/* Video badge — klik toggle video embed */}
+                            {/* Video badge */}
                             {videoUrl && (
                               <button
                                 style={{ ...S.tag, fontSize:9, color:"var(--error-mid)", background:"none",
@@ -1572,11 +1610,11 @@ export default function App() {
                                 {e.showVideo ? "▶ HIDE VIDEO" : "▶ VIDEO"}
                               </button>
                             )}
-                            {/* Toggle extras */}
+                            {/* Toggle MORE */}
                             <button
                               style={{ background:"none", border:"none", cursor:"pointer", fontSize:9, color:"var(--text-faint)", padding:"3px 6px", letterSpacing:"0.06em", fontFamily:"'DM Mono', monospace" }}
                               onClick={() => updateEntry(e.id, { showExtras: !e.showExtras })}>
-                              {e.showExtras ? "▲ LESS" : `⋯ MORE${hasExtra ? " ●" : ""}`}
+                              {e.showExtras ? "▲ LESS" : `⋯ MORE${hasExtra || eBestOrm ? " ●" : ""}`}
                             </button>
                           </div>
                           {/* Embedded YouTube video */}
@@ -1601,13 +1639,22 @@ export default function App() {
                           })()}
                           {e.showExtras && (
                             <div style={{ borderTop:`1px solid var(--border-faint)`, paddingTop:10, marginTop:4 }}>
-                              <div style={{ marginBottom:10 }}>
-                                <label style={S.label}>SET TYPE</label>
-                                <select style={S.select} value={e.setType}
-                                  onChange={ev => updateEntry(e.id, { setType: ev.target.value })}>
-                                  {SET_TYPES.map(t => <option key={t}>{t}</option>)}
-                                </select>
-                              </div>
+                              {/* 1RM guide under MORE */}
+                              {eBestOrm && (
+                                <div style={{...S.orm, marginBottom:10}}>
+                                  <div style={S.ormTitle}>BEST 1RM — {e.exercise} / {e.equipment}</div>
+                                  {[[40,"WARM-UP SET"],[60,"LIGHT SET"],[80,"WORKING SET"]].map(([pct, label]) => (
+                                    <div key={pct} style={S.ormRow}>
+                                      <span style={S.ormLabel}>{pct}% — {label}</span>
+                                      <span style={S.ormValue}>{Math.round(eBestOrm * pct / 100 * 2) / 2} kg</span>
+                                    </div>
+                                  ))}
+                                  <div style={{...S.ormRow, marginTop:6, borderTop:"1px solid var(--accent-border)", paddingTop:6}}>
+                                    <span style={S.ormLabel}>BEST 1RM</span>
+                                    <span style={{...S.ormValue, fontSize:13}}>{eBestOrm} kg</span>
+                                  </div>
+                                </div>
+                              )}
                               <div style={{ marginBottom:4 }}>
                                 <label style={S.label}>NOTES</label>
                                 <input type="text" style={S.input} placeholder="SET NOTES (OPTIONAL)" value={e.notes}
@@ -2547,42 +2594,130 @@ export default function App() {
 }
 
 // ─── INSIGHTS VIEW ────────────────────────────────────────────────────────────
-// Wrapper der auto-loader historik ved mount og viser kun øvelser med data
 function InsightsView({ allRecords, exerciseDetailCache, loadExerciseDetail, getRecordsForExercise, loadingDetail, statsEx, setStatsEx, best1RMMap }) {
-  // Øvelser der faktisk har historik (fra allRecords som dækker 90 dage)
-  const exercisesWithData = [...new Set(allRecords.filter(r => r.oneRepMax).map(r => r.exercise).filter(Boolean))].sort();
+  const [insightsTab, setInsightsTab] = useState("stats"); // "stats" | "history"
+  const [histEx, setHistEx] = useState("");
+  const [histEq, setHistEq] = useState("");
 
-  // Auto-load fuld historik for valgt øvelse ved mount eller skift
+  const exercisesWithData = [...new Set(allRecords.filter(r => r.oneRepMax).map(r => r.exercise).filter(Boolean))].sort();
+  const allExercisesInHistory = [...new Set(allRecords.map(r => r.exercise).filter(Boolean))].sort();
+  const allEquipmentInHistory = [...new Set(allRecords.map(r => r.equipment).filter(Boolean))].sort();
+
   useEffect(() => {
     if (statsEx) loadExerciseDetail(statsEx);
   }, [statsEx]);
 
-  // Hvis ingen øvelse valgt endnu — vælg automatisk den første med data
   useEffect(() => {
     if (!statsEx && exercisesWithData.length > 0) {
       setStatsEx(exercisesWithData[0]);
     }
   }, [exercisesWithData.length]);
 
+  // Filtrer historik
+  const historyRecords = allRecords.filter(r =>
+    (!histEx || r.exercise === histEx) &&
+    (!histEq || r.equipment === histEq)
+  );
+
+  // Grupper historik pr. dag
+  const histByDay = {};
+  for (const r of historyRecords) {
+    if (!r.date) continue;
+    if (!histByDay[r.date]) histByDay[r.date] = [];
+    histByDay[r.date].push(r);
+  }
+  const histDays = Object.entries(histByDay)
+    .sort((a, b) => b[0].localeCompare(a[0]));
+
   return (
     <div>
-      <div style={{ marginBottom:12 }}>
-        <label style={S.label}>EXERCISE</label>
-        <select style={S.select} value={statsEx} onChange={e => setStatsEx(e.target.value)}>
-          {exercisesWithData.map(ex => <option key={ex}>{ex}</option>)}
-        </select>
-        {loadingDetail && (
-          <div style={{ fontSize:9, color:"var(--text-muted)", marginTop:6, letterSpacing:"0.08em" }}>
-            ↻ LOADING FULL HISTORY…
-          </div>
-        )}
+      {/* Sub-tabs */}
+      <div style={{ display:"flex", gap:0, marginBottom:16, borderBottom:"1px solid var(--border-subtle)" }}>
+        {[["stats","STATS"],["history","HISTORY"]].map(([k, l]) => (
+          <button key={k}
+            style={{
+              flex:1, padding:"8px 0", fontSize:10, letterSpacing:"0.12em",
+              fontFamily:"'DM Mono', monospace", border:"none", background:"none",
+              cursor:"pointer", fontWeight:600,
+              color: insightsTab === k ? "var(--accent)" : "var(--text-faint)",
+              borderBottom: insightsTab === k ? "2px solid var(--accent)" : "2px solid transparent",
+              marginBottom:-1,
+            }}
+            onClick={() => setInsightsTab(k)}>{l}</button>
+        ))}
       </div>
-      {statsEx && (
-        <StatsView
-          exercise={statsEx}
-          allRecords={getRecordsForExercise(statsEx)}
-          best1RMMap={best1RMMap}
-        />
+
+      {/* STATS tab */}
+      {insightsTab === "stats" && (
+        <div>
+          <div style={{ marginBottom:12 }}>
+            <label style={S.label}>EXERCISE</label>
+            <select style={S.select} value={statsEx} onChange={e => setStatsEx(e.target.value)}>
+              {exercisesWithData.map(ex => <option key={ex}>{ex}</option>)}
+            </select>
+            {loadingDetail && (
+              <div style={{ fontSize:9, color:"var(--text-muted)", marginTop:6, letterSpacing:"0.08em" }}>
+                ↻ LOADING FULL HISTORY…
+              </div>
+            )}
+          </div>
+          {statsEx && (
+            <StatsView
+              exercise={statsEx}
+              allRecords={getRecordsForExercise(statsEx)}
+              best1RMMap={best1RMMap}
+            />
+          )}
+        </div>
+      )}
+
+      {/* HISTORY tab */}
+      {insightsTab === "history" && (
+        <div>
+          <div style={{...S.grid2, marginBottom:10}}>
+            <select style={S.select} value={histEx} onChange={e => setHistEx(e.target.value)}>
+              <option value="">All exercises</option>
+              {allExercisesInHistory.map(ex => <option key={ex}>{ex}</option>)}
+            </select>
+            <select style={S.select} value={histEq} onChange={e => setHistEq(e.target.value)}>
+              <option value="">All equipment</option>
+              {allEquipmentInHistory.map(eq => <option key={eq}>{eq}</option>)}
+            </select>
+          </div>
+          <div style={{ fontSize:9, color:"var(--text-muted)", marginBottom:10, letterSpacing:"0.06em" }}>
+            {historyRecords.length} sets across {histDays.length} sessions
+          </div>
+          {histDays.map(([date, recs]) => (
+            <div key={date} style={{...S.card, marginBottom:8, padding:"10px 12px"}}>
+              <div style={{ fontSize:10, color:"var(--text-label)", letterSpacing:"0.1em", marginBottom:8, fontFamily:"'DM Mono', monospace" }}>
+                {toDisplay(date)} · {recs.length} sets
+              </div>
+              {recs.map((r, i) => (
+                <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid var(--border-faint)" }}>
+                  <div style={{ minWidth:0, flex:1 }}>
+                    <div style={{ fontSize:11, color:"var(--text-primary)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {r.exercise}
+                    </div>
+                    <div style={{ fontSize:9, color:"var(--text-faint)" }}>
+                      {r.equipment}{r.handle ? ` · ${r.handle}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ textAlign:"right", flexShrink:0, marginLeft:8 }}>
+                    <div style={{ fontSize:12, color:"var(--accent)", fontWeight:600 }}>
+                      {r.kg != null ? r.kg : "—"} kg × {r.reps != null ? r.reps : "—"}
+                    </div>
+                    {r.oneRepMax && <div style={{ fontSize:9, color:"var(--text-faint)" }}>1RM ~{r.oneRepMax}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+          {histDays.length === 0 && (
+            <div style={{ color:"var(--text-faint)", fontSize:12, textAlign:"center", marginTop:40 }}>
+              No sets matching filters
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
