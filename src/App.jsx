@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzIKm91xC8Ndrd_Sl__lYb7eLFIohJVnfNM_1JX9xmUrMQbaPwi1kIYL1PUyfboMpyY/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxl3nA_qW9T-YfNo7zBUByolqfoniBoRiYtO-Tu4xY3csc4VOUcQSH9IdfSbUq-OerZ/exec";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
@@ -233,6 +233,27 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// ─── YOUTUBE HELPERS ──────────────────────────────────────────────────────────
+// Parser YouTube URL → embed URL. Understøtter youtu.be, watch?v=, /embed/
+function getYouTubeEmbedUrl(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    let id = null;
+    if (u.hostname === "youtu.be") {
+      id = u.pathname.slice(1).split("?")[0];
+    } else if (u.hostname.includes("youtube.com")) {
+      if (u.pathname.includes("/embed/")) {
+        id = u.pathname.split("/embed/")[1].split("?")[0];
+      } else {
+        id = u.searchParams.get("v");
+      }
+    }
+    if (id) return `https://www.youtube.com/embed/${id}?rel=0&modestbranding=1`;
+  } catch(e) {}
+  return null;
+}
+
 // ─── REP RANGE HELPERS ────────────────────────────────────────────────────────
 function parseRepRange(str) {
   if (!str) return { min: "", max: "" };
@@ -405,7 +426,7 @@ export default function App() {
     id: newSetId(),
     exercise: "", equipment: "", handle: "", kg: "", reps: "",
     repsGoal: "8-10", setType: "NORMAL SET", notes: "",
-    collapsed: false, showExtras: false,
+    collapsed: false, showExtras: false, showVideo: false,
   });
   const [entries, setEntries] = useState([blankEntry()]);
   const [saving, setSaving] = useState(false);
@@ -500,6 +521,16 @@ export default function App() {
   }, []);
   const removePlanSet = useCallback((id) => {
     setPlanSets(prev => prev.length > 1 ? prev.filter(s => s.id !== id) : prev);
+  }, []);
+  const movePlanSet = useCallback((id, dir) => {
+    setPlanSets(prev => {
+      const idx = prev.findIndex(s => s.id === id);
+      const newIdx = idx + dir;
+      if (newIdx < 0 || newIdx >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+      return next;
+    });
   }, []);
   const addPlanSet = useCallback(() => {
     setPlanSets(prev => {
@@ -979,15 +1010,20 @@ export default function App() {
     return map;
   }, [sheetExercises]);
 
-  // Video lookup: [{exercise, equipment, url}] — henter URL pr. (øvelse, redskab)
-  const getVideoUrl = useCallback((exercise, equipment) => {
+  // Video lookup: [{exercise, equipment, handle, url}] — henter URL pr. (øvelse, redskab, handle)
+  const getVideoUrl = useCallback((exercise, equipment, handle) => {
     if (!exercise) return null;
-    // Præcist match: øvelse + redskab
-    const exact = sheetVideos.find(v =>
-      v.exercise === exercise && v.equipment === (equipment || "")
-    );
+    const eq = equipment || "";
+    const h = handle || "";
+    // 1. Præcist match: øvelse + redskab + handle
+    const exact = sheetVideos.find(v => v.exercise === exercise && v.equipment === eq && (v.handle||"") === h);
     if (exact) return exact.url;
-    // Fallback: øvelse uden redskab
+    // 2. Match: øvelse + redskab (ingen handle)
+    if (h) {
+      const withoutHandle = sheetVideos.find(v => v.exercise === exercise && v.equipment === eq && !v.handle);
+      if (withoutHandle) return withoutHandle.url;
+    }
+    // 3. Generel: kun øvelse
     return sheetVideos.find(v => v.exercise === exercise && !v.equipment)?.url || null;
   }, [sheetVideos]);
 
@@ -1533,7 +1569,7 @@ export default function App() {
                     {/* SET TYPE + NOTES som kollapsbar sektion */}
                     {(() => {
                       const hasExtra = e.setType !== "NORMAL SET" || e.notes;
-                      const videoUrl = getVideoUrl(e.exercise, e.equipment);
+                      const videoUrl = getVideoUrl(e.exercise, e.equipment, e.handle);
                       return (
                         <>
                           <div style={{ display:"flex", gap:6, marginBottom: e.showExtras ? 10 : 0, flexWrap:"wrap" }}>
@@ -1547,13 +1583,15 @@ export default function App() {
                                 📝 {e.notes}
                               </span>
                             )}
-                            {/* Video badge */}
+                            {/* Video badge — klik toggle video embed */}
                             {videoUrl && (
-                              <a href={videoUrl} target="_blank" rel="noopener noreferrer"
-                                style={{ ...S.tag, fontSize:9, color:"var(--error-mid)", textDecoration:"none", cursor:"pointer" }}
-                                onClick={ev => ev.stopPropagation()}>
-                                ▶ VIDEO
-                              </a>
+                              <button
+                                style={{ ...S.tag, fontSize:9, color:"var(--error-mid)", background:"none",
+                                  border:`1px solid var(--error-border)`, cursor:"pointer",
+                                  fontFamily:"'DM Mono', monospace", letterSpacing:"0.06em" }}
+                                onClick={ev => { ev.stopPropagation(); updateEntry(e.id, { showVideo: !e.showVideo }); }}>
+                                {e.showVideo ? "▶ HIDE VIDEO" : "▶ VIDEO"}
+                              </button>
                             )}
                             {/* Toggle extras */}
                             <button
@@ -1562,6 +1600,26 @@ export default function App() {
                               {e.showExtras ? "▲ LESS" : `⋯ MORE${hasExtra ? " ●" : ""}`}
                             </button>
                           </div>
+                          {/* Embedded YouTube video */}
+                          {e.showVideo && videoUrl && (() => {
+                            const embedUrl = getYouTubeEmbedUrl(videoUrl);
+                            return embedUrl ? (
+                              <div style={{ marginBottom:8, borderRadius:8, overflow:"hidden", background:"#000", aspectRatio:"16/9" }}>
+                                <iframe
+                                  src={embedUrl}
+                                  style={{ width:"100%", height:"100%", border:"none", display:"block" }}
+                                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                  allowFullScreen
+                                  title="Exercise video"
+                                />
+                              </div>
+                            ) : (
+                              <a href={videoUrl} target="_blank" rel="noopener noreferrer"
+                                style={{ display:"block", fontSize:10, color:"var(--error-mid)", marginBottom:8 }}>
+                                ▶ Open video ↗
+                              </a>
+                            );
+                          })()}
                           {e.showExtras && (
                             <div style={{ borderTop:`1px solid var(--border-faint)`, paddingTop:10, marginTop:4 }}>
                               <div style={{ marginBottom:10 }}>
@@ -1761,39 +1819,55 @@ export default function App() {
                           Used as default when logging this exercise.
                         </div>
                       </div>
-                      {/* Video URLs — pr. redskab */}
+                      {/* Video URLs — pr. (redskab + handle) */}
                       <div style={{ marginBottom:10 }}>
                         <label style={S.label}>VIDEOS</label>
                         <div style={{ fontSize:9, color:"var(--text-faint)", marginBottom:6, letterSpacing:"0.04em" }}>
-                          Tilføj YouTube-link pr. redskab — vises som ▶ VIDEO badge i LOG.
+                          Add a YouTube link per equipment/handle combination. Shown as ▶ VIDEO in LOG.
                         </div>
-                        {/* Eksisterende redskaber + eventuelle gemte videoer */}
-                        {[...new Set([
-                          ...eqList,
-                          ...sheetVideos.filter(v => v.exercise === ex).map(v => v.equipment).filter(Boolean),
-                          ""
-                        ])].map(eq => {
-                          const existingUrl = sheetVideos.find(v => v.exercise === ex && v.equipment === eq)?.url || "";
-                          const inputId = `vid_${ex}_${eq}`;
-                          return (
-                            <VideoRow key={eq} exercise={ex} equipment={eq} existingUrl={existingUrl}
-                              onSave={(url) => {
-                                postToAppsScript({ type:"video_save", exercise: ex, equipment: eq, url })
-                                  .then(ok => {
-                                    if (ok) {
-                                      setSheetVideos(prev => {
-                                        const filtered = prev.filter(v => !(v.exercise === ex && v.equipment === eq));
-                                        return url ? [...filtered, { exercise: ex, equipment: eq, url }] : filtered;
-                                      });
-                                      showToast(url ? "Video saved ✓" : "Video removed", true);
-                                    } else {
-                                      showToast("Could not save video", false);
-                                    }
-                                  });
-                              }}
-                            />
-                          );
-                        })}
+                        {/* Byg kombinationer fra historik + eksisterende videoer */}
+                        {(() => {
+                          // Find alle (equipment, handle) kombinationer for denne øvelse
+                          const combos = [];
+                          const seen = new Set();
+                          // Fra historik
+                          allRecords.filter(r => r.exercise === ex).forEach(r => {
+                            const key = `${r.equipment||""}::${r.handle||""}`;
+                            if (!seen.has(key)) { seen.add(key); combos.push({ equipment: r.equipment||"", handle: r.handle||"" }); }
+                          });
+                          // Fra eksisterende videoer (kan have kombinationer der ikke er i de 90 dage)
+                          sheetVideos.filter(v => v.exercise === ex).forEach(v => {
+                            const key = `${v.equipment||""}::${v.handle||""}`;
+                            if (!seen.has(key)) { seen.add(key); combos.push({ equipment: v.equipment||"", handle: v.handle||"" }); }
+                          });
+                          // Tilføj "ingen redskab" fallback
+                          if (!seen.has("::")) combos.push({ equipment: "", handle: "" });
+
+                          return combos.sort((a, b) => a.equipment.localeCompare(b.equipment) || a.handle.localeCompare(b.handle)).map(({ equipment: eq, handle: h }) => {
+                            const existingUrl = sheetVideos.find(v => v.exercise === ex && v.equipment === eq && (v.handle||"") === h)?.url || "";
+                            return (
+                              <VideoRow
+                                key={`${eq}::${h}`}
+                                exercise={ex} equipment={eq} handle={h}
+                                existingUrl={existingUrl}
+                                onSave={(url) => {
+                                  postToAppsScript({ type:"video_save", exercise: ex, equipment: eq, handle: h, url })
+                                    .then(ok => {
+                                      if (ok) {
+                                        setSheetVideos(prev => {
+                                          const filtered = prev.filter(v => !(v.exercise === ex && v.equipment === eq && (v.handle||"") === h));
+                                          return url ? [...filtered, { exercise: ex, equipment: eq, handle: h, url }] : filtered;
+                                        });
+                                        showToast(url ? "Video saved ✓" : "Video removed", true);
+                                      } else {
+                                        showToast("Could not save video", false);
+                                      }
+                                    });
+                                }}
+                              />
+                            );
+                          });
+                        })()}
                       </div>
                       {/* Redskaber med 1RM */}
                       {eqList.length > 0 && (
@@ -2069,6 +2143,25 @@ export default function App() {
                           onClick={() => { importPlan(plan.name); setView("log"); setExpandedPlan(null); }}>
                           IMPORT TO LOG →
                         </button>
+                        <button style={{...S.btnGhost, fontSize:10}}
+                          onClick={() => {
+                            // Load plan ind i CREATE PLAN form
+                            setPlanName(plan.name);
+                            setPlanSets((plan.sets || [])
+                              .sort((a, b) => (a.order || 0) - (b.order || 0))
+                              .map(s => ({
+                                id: `p_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+                                exercise: s.exercise || "", equipment: s.equipment || "",
+                                handle: s.handle || "", kg: s.kg ? String(s.kg) : "",
+                                reps: s.reps ? String(s.reps) : "",
+                                repsGoal: s.repsGoal || "", setType: s.setType || "NORMAL SET",
+                                notes: s.notes || "",
+                              })));
+                            setExpandedPlan(null);
+                            setView("create-plan");
+                          }}>
+                          EDIT
+                        </button>
                         <button style={{...S.btnGhost, fontSize:10, color:"var(--error-mid)", borderColor:"var(--error-border)"}}
                           onClick={() => handleDeletePlan(plan.name)}>
                           DELETE
@@ -2147,10 +2240,19 @@ export default function App() {
               <div key={s.id} style={S.card}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
                   <div style={{ fontSize:10, color:"var(--text-dim)", letterSpacing:"0.1em" }}>SET {idx + 1}</div>
-                  {planSets.length > 1 && (
-                    <button style={{ background:"none", border:"none", color:"var(--text-label)", fontSize:14, cursor:"pointer", padding:0 }}
-                      onClick={() => removePlanSet(s.id)} aria-label="Remove set">×</button>
-                  )}
+                  <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+                    {/* Rækkefølge-pile */}
+                    <button
+                      style={{ background:"none", border:"none", color: idx === 0 ? "var(--border)" : "var(--text-label)", fontSize:13, cursor: idx === 0 ? "default" : "pointer", padding:"0 3px", lineHeight:1 }}
+                      onClick={() => movePlanSet(s.id, -1)} disabled={idx === 0} title="Move up">↑</button>
+                    <button
+                      style={{ background:"none", border:"none", color: idx === planSets.length-1 ? "var(--border)" : "var(--text-label)", fontSize:13, cursor: idx === planSets.length-1 ? "default" : "pointer", padding:"0 3px", lineHeight:1 }}
+                      onClick={() => movePlanSet(s.id, 1)} disabled={idx === planSets.length-1} title="Move down">↓</button>
+                    {planSets.length > 1 && (
+                      <button style={{ background:"none", border:"none", color:"var(--text-label)", fontSize:15, cursor:"pointer", padding:"0 3px", lineHeight:1 }}
+                        onClick={() => removePlanSet(s.id)} aria-label="Remove set">×</button>
+                    )}
+                  </div>
                 </div>
                 <div style={{ marginBottom:10 }}>
                   <label style={S.label}>EXERCISE</label>
@@ -2626,43 +2728,41 @@ function ProgressChart({ records }) {
 }
 
 // ─── VIDEO ROW ────────────────────────────────────────────────────────────────
-function VideoRow({ exercise, equipment, existingUrl, onSave }) {
+function VideoRow({ exercise, equipment, handle, existingUrl, onSave }) {
   const [url, setUrl] = useState(existingUrl || "");
   const [saving, setSaving] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const changed = url !== (existingUrl || "");
 
+  // Label: "CABLE TOWER · ROPE", "CABLE TOWER", eller "General"
   const label = equipment
-    ? equipment
+    ? (handle ? `${equipment} · ${handle}` : equipment)
     : "General (no equipment)";
 
+  const embedUrl = getYouTubeEmbedUrl(url || existingUrl || "");
+  const savedUrl = existingUrl || "";
+
   return (
-    <div style={{ marginBottom:8 }}>
-      <div style={{ fontSize:9, color:"var(--text-label)", letterSpacing:"0.08em", marginBottom:3 }}>
+    <div style={{ marginBottom:10, padding:"8px 10px", background:"var(--card)", border:"1px solid var(--border)", borderRadius:8 }}>
+      {/* Label */}
+      <div style={{ fontSize:9, color:"var(--text-muted)", letterSpacing:"0.1em", marginBottom:6, fontFamily:"'DM Mono', monospace" }}>
         {label}
       </div>
-      <div style={{ display:"flex", gap:6 }}>
-        {url && !changed ? (
-          <a href={url} target="_blank" rel="noopener noreferrer"
-            style={{ flex:1, fontSize:11, color:"var(--error-mid)", textDecoration:"none",
-              background:"var(--accent-bg)", border:"1px solid var(--accent-border)",
-              borderRadius:6, padding:"7px 10px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-            ▶ {url.replace("https://","").slice(0,36)}…
-          </a>
-        ) : (
-          <input
-            style={{ ...{width:"100%", background:"var(--bg)", border:"1px solid var(--border-input)",
-              borderRadius:6, padding:"7px 10px", color:"var(--text-primary)",
-              fontFamily:"'DM Mono', monospace", fontSize:12, boxSizing:"border-box", outline:"none"}, flex:1 }}
-            value={url}
-            onChange={e => setUrl(e.target.value)}
-            placeholder="https://youtube.com/..."
-          />
-        )}
+      {/* URL input + knapper */}
+      <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+        <input
+          style={{ flex:1, background:"var(--bg)", border:`1px solid ${changed ? "var(--accent-border)" : "var(--border-input)"}`,
+            borderRadius:6, padding:"7px 10px", color:"var(--text-primary)",
+            fontFamily:"'DM Mono', monospace", fontSize:11, boxSizing:"border-box", outline:"none" }}
+          value={url}
+          onChange={e => setUrl(e.target.value)}
+          placeholder="https://youtube.com/..."
+        />
         {changed && (
           <button
             style={{ background:"var(--accent)", color:"var(--bg)", border:"none", borderRadius:6,
-              padding:"0 12px", fontSize:10, fontWeight:700, cursor:"pointer",
-              fontFamily:"'DM Mono', monospace", letterSpacing:"0.08em", opacity: saving ? 0.6 : 1 }}
+              padding:"7px 14px", fontSize:10, fontWeight:700, cursor:"pointer",
+              fontFamily:"'DM Mono', monospace", letterSpacing:"0.08em", opacity: saving ? 0.6 : 1, flexShrink:0 }}
             disabled={saving}
             onClick={async () => {
               setSaving(true);
@@ -2672,16 +2772,37 @@ function VideoRow({ exercise, equipment, existingUrl, onSave }) {
             {saving ? "…" : "SAVE"}
           </button>
         )}
-        {url && !changed && (
-          <button
-            style={{ background:"none", border:"1px solid var(--border-input)", borderRadius:6,
-              padding:"0 10px", fontSize:10, color:"var(--text-faint)", cursor:"pointer",
-              fontFamily:"'DM Mono', monospace" }}
-            onClick={() => setUrl("")}>
-            ✕
-          </button>
+        {savedUrl && !changed && (
+          <>
+            <button
+              style={{ background:"none", border:"1px solid var(--accent-border)", borderRadius:6,
+                padding:"6px 10px", fontSize:10, color:"var(--accent)", cursor:"pointer",
+                fontFamily:"'DM Mono', monospace", flexShrink:0 }}
+              onClick={() => setShowPreview(p => !p)}>
+              {showPreview ? "▼" : "▶"}
+            </button>
+            <button
+              style={{ background:"none", border:"1px solid var(--border-input)", borderRadius:6,
+                padding:"6px 10px", fontSize:10, color:"var(--text-faint)", cursor:"pointer",
+                fontFamily:"'DM Mono', monospace", flexShrink:0 }}
+              onClick={() => setUrl("")}>
+              ✕
+            </button>
+          </>
         )}
       </div>
+      {/* Embedded preview */}
+      {showPreview && embedUrl && (
+        <div style={{ marginTop:8, borderRadius:6, overflow:"hidden", background:"#000", aspectRatio:"16/9" }}>
+          <iframe
+            src={embedUrl}
+            style={{ width:"100%", height:"100%", border:"none", display:"block" }}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+            title="Exercise video"
+          />
+        </div>
+      )}
     </div>
   );
 }
