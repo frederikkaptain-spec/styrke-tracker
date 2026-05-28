@@ -209,8 +209,8 @@ async function saveCenterToSheet(center) {
 // ─── 1RM BEREGNING ────────────────────────────────────────────────────────────
 function calc1RM(kg, reps) {
   if (!kg || !reps || reps <= 0) return null;
-  if (reps === 1) return kg;
-  return Math.round(kg * (1 + reps / 30) * 10) / 10;
+  if (reps === 1) return parseFloat(kg.toFixed(1));
+  return parseFloat((kg * (1 + reps / 30)).toFixed(1));
 }
 
 function normalizeKg(kg, equipment) {
@@ -282,6 +282,14 @@ const ALL_EXERCISES = [];
 const ALL_EQUIPMENT = [];
 
 const SET_TYPES = ["NORMAL SET","WARM-UP SET","DROP SET","AMRAP"];
+
+// Farver pr. set type — bruges i collapsed badge så typer er visuelt adskilte.
+const SET_TYPE_COLORS = {
+  "NORMAL SET": { bg: "var(--accent-bg-mid)", fg: "var(--accent)" },
+  "WARM-UP SET": { bg: "#2a2200", fg: "#e8c840" },
+  "DROP SET": { bg: "#2a1200", fg: "#e88040" },
+  "AMRAP": { bg: "#1a0a2a", fg: "#b080e8" },
+};
 
 // Handles til CABLE TOWER. Bruges som ekstra valg når redskab = CABLE TOWER.
 const HANDLES = ["ROPE", "BAR", "CLOSE GRIP HANDLE", "WIDE GRIP HANDLE"];
@@ -440,7 +448,7 @@ export default function App() {
   });
   const [entries, setEntries] = useState(() => {
     const draft = getDraft();
-    return (draft?.entries?.length > 0) ? draft.entries : [blankEntry()];
+    return (draft?.entries?.length > 0) ? draft.entries : [];
   });
   const [saving, setSaving] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -1029,6 +1037,18 @@ export default function App() {
     return sheetVideos.find(v => v.exercise === exercise && !v.equipment)?.url || null;
   }, [sheetVideos]);
 
+  // Helper: hvilke øvelser er lavet med et givet redskab? (rettelse 8)
+  const getExercisesForEquipment = useCallback((equipmentName) => {
+    if (!equipmentName) return [];
+    // 1) Fra øvelses-masterlistens equipment-kolonne
+    const fromMaster = sheetExercises
+      .filter(e => e.name && (e.equipment || "").split(",").map(s => s.trim()).filter(Boolean).includes(equipmentName))
+      .map(e => e.name);
+    // 2) Fra faktisk historik
+    const fromHistory = [...new Set(allRecords.filter(r => r.equipment === equipmentName && r.exercise).map(r => r.exercise))];
+    return [...new Set([...fromMaster, ...fromHistory])].sort();
+  }, [sheetExercises, allRecords]);
+
   // Helper: hvilke redskaber kan en given øvelse laves med?
   // Prioritet: 1) Øvelser-arkets Redskab-kolonne, 2) hvad brugeren faktisk har brugt før, 3) alle redskaber
   const getEquipForExercise = useCallback((exerciseName) => {
@@ -1048,6 +1068,21 @@ export default function App() {
     () => getEquipForExercise(entry.exercise),
     [entry.exercise, getEquipForExercise]
   );
+
+  // Koblede filter-lister til WORKOUT HISTORY (rettelse 9):
+  // - Hvis et equipment er valgt, vis kun øvelser brugt med det.
+  // - Hvis en øvelse er valgt, vis kun equipment brugt til den.
+  const histExerciseOptions = useMemo(() => {
+    if (!histEq) return allExercises;
+    const used = getExercisesForEquipment(histEq);
+    return used.length ? used : allExercises;
+  }, [histEq, allExercises, getExercisesForEquipment]);
+
+  const histEquipmentOptions = useMemo(() => {
+    if (!histEx) return allEquipment;
+    const used = getEquipForExercise(histEx);
+    return used.length ? used : allEquipment;
+  }, [histEx, allEquipment, getEquipForExercise]);
 
   // ── Live 1RM estimate ──
   const liveOrm = useMemo(() => {
@@ -1231,12 +1266,12 @@ export default function App() {
           </div>
         </div>
         <div style={S.nav}>
-          {[["log","LOG WORKOUT"],["resources","RESOURCES"],["plans","PROGRAM"],["history","WORKOUT HISTORY"],["insights","INSIGHTS"]].map(([k,l]) => (
-            <button key={k} style={S.navBtn(view===k || (k==="resources" && ["exercises","equipment","gyms"].includes(view)) || (k==="plans" && ["existing-plans","create-plan"].includes(view)))} onClick={() => setView(k === "resources" ? "exercises" : k === "plans" ? "existing-plans" : k)}>{l}</button>
+          {[["log","LOG WORKOUT"],["resources","RESOURCES"],["plans","PROGRAM"],["performance","PERFORMANCE"]].map(([k,l]) => (
+            <button key={k} style={S.navBtn(view===k || (k==="resources" && (view==="exercises" || view==="equipment" || view==="gyms")) || (k==="plans" && (view==="existing-plans" || view==="create-plan")) || (k==="performance" && (view==="history" || view==="insights")))} onClick={() => setView(k === "resources" ? "exercises" : k === "plans" ? "existing-plans" : k === "performance" ? "history" : k)}>{l}</button>
           ))}
         </div>
         {/* Sub-nav for RESOURCES */}
-        {["exercises","equipment","gyms"].includes(view) && (
+        {(view==="exercises" || view==="equipment" || view==="gyms") && (
           <div style={{...S.nav, marginTop:8, paddingLeft:8, borderLeft:"2px solid var(--accent-border)"}}>
             {[["exercises","EXERCISES"],["equipment","EQUIPMENT"],["gyms","GYMS"]].map(([k,l]) => (
               <button key={k} style={{...S.navBtn(view===k), fontSize:10}} onClick={() => setView(k)}>{l}</button>
@@ -1244,9 +1279,17 @@ export default function App() {
           </div>
         )}
         {/* Sub-nav for WORKOUT PLAN */}
-        {["existing-plans","create-plan"].includes(view) && (
+        {(view==="existing-plans" || view==="create-plan") && (
           <div style={{...S.nav, marginTop:8, paddingLeft:8, borderLeft:"2px solid var(--accent-border)"}}>
             {[["existing-plans","EXISTING PROGRAMS"],["create-plan","NEW PROGRAM"]].map(([k,l]) => (
+              <button key={k} style={{...S.navBtn(view===k), fontSize:10}} onClick={() => setView(k)}>{l}</button>
+            ))}
+          </div>
+        )}
+        {/* Sub-nav for PERFORMANCE */}
+        {(view==="history" || view==="insights") && (
+          <div style={{...S.nav, marginTop:8, paddingLeft:8, borderLeft:"2px solid var(--accent-border)"}}>
+            {[["history","HISTORY"],["insights","INSIGHTS"]].map(([k,l]) => (
               <button key={k} style={{...S.navBtn(view===k), fontSize:10}} onClick={() => setView(k)}>{l}</button>
             ))}
           </div>
@@ -1335,7 +1378,7 @@ export default function App() {
               }}
               onClick={() => { setShowImport(s => !s); setShowImportPlan(false); }}
             >
-              {showImport ? "▲ CLOSE" : "↓ DUPLICATE WORKOUT"}
+              {showImport ? "▲ CLOSE" : "+ DUPLICATE WORKOUT"}
             </button>
             <button
               style={{
@@ -1349,7 +1392,7 @@ export default function App() {
               }}
               onClick={() => { setShowImportPlan(s => !s); setShowImport(false); }}
             >
-              {showImportPlan ? "▲ CLOSE" : "↓ DUPLICATE PROGRAM"}
+              {showImportPlan ? "▲ CLOSE" : "+ DUPLICATE PROGRAM"}
             </button>
           </div>
           {showImport && (
@@ -1455,8 +1498,10 @@ export default function App() {
                 >
                   <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0, flex:1 }}>
                     <span style={{
-                      fontSize:9, color:"var(--accent)", letterSpacing:"0.12em",
-                      background:"var(--accent-bg-mid)", padding:"3px 7px", borderRadius:4, fontWeight:600,
+                      fontSize:9, letterSpacing:"0.12em",
+                      color: (SET_TYPE_COLORS[thisType] || SET_TYPE_COLORS["NORMAL SET"]).fg,
+                      background: (SET_TYPE_COLORS[thisType] || SET_TYPE_COLORS["NORMAL SET"]).bg,
+                      padding:"3px 7px", borderRadius:4, fontWeight:600,
                       flexShrink:0, whiteSpace:"nowrap",
                     }}>
                       {badgeLabel}
@@ -1618,12 +1663,11 @@ export default function App() {
                             </button>
                           </div>
                           {/* Embedded YouTube video */}
-                          {e.showVideo && videoUrl && (() => {
-                            const embedUrl = getYouTubeEmbedUrl(videoUrl);
-                            return embedUrl ? (
-                              <div style={{ marginBottom:8, borderRadius:8, overflow:"hidden", background:"#000", aspectRatio:"16/9" }}>
+                          {e.showVideo && videoUrl && (
+                            getYouTubeEmbedUrl(videoUrl) ? (
+                              <div style={{ marginTop:12, marginBottom:8, borderRadius:8, overflow:"hidden", background:"#000", aspectRatio:"16/9" }}>
                                 <iframe
-                                  src={embedUrl}
+                                  src={getYouTubeEmbedUrl(videoUrl)}
                                   style={{ width:"100%", height:"100%", border:"none", display:"block" }}
                                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                                   allowFullScreen
@@ -1632,13 +1676,13 @@ export default function App() {
                               </div>
                             ) : (
                               <a href={videoUrl} target="_blank" rel="noopener noreferrer"
-                                style={{ display:"block", fontSize:10, color:"var(--error-mid)", marginBottom:8 }}>
-                                ▶ Open video ↗
+                                style={{ display:"block", fontSize:10, color:"var(--error-mid)", marginTop:12, marginBottom:8 }}>
+                                {"▶ Open video ↗"}
                               </a>
-                            );
-                          })()}
+                            )
+                          )}
                           {e.showExtras && (
-                            <div style={{ borderTop:`1px solid var(--border-faint)`, paddingTop:10, marginTop:4 }}>
+                            <div style={{ borderTop:"1px solid var(--border-faint)", paddingTop:10, marginTop:4 }}>
                               {/* 1RM guide under MORE */}
                               {eBestOrm && (
                                 <div style={{...S.orm, marginBottom:10}}>
@@ -1691,20 +1735,28 @@ export default function App() {
             + ADD SET
           </button>
 
-          {/* Gem-knap */}
-          <button
-            style={{...S.btn, width:"100%", opacity: saving ? 0.6 : 1}}
-            onClick={handleSave}
-            disabled={saving}
-          >
-            {saving
-              ? "SAVING..."
-              : `SAVE ${entries.length} ${entries.length === 1 ? "SET" : "SETS"}`}
-          </button>
+          {entries.length === 0 && (
+            <div style={{...S.card, textAlign:"center", padding:"24px 14px", marginBottom:10}}>
+              <div style={{ fontSize:12, color:"var(--text-muted)", marginBottom:4 }}>{"No sets yet"}</div>
+              <div style={{ fontSize:10, color:"var(--text-faint)", letterSpacing:"0.05em" }}>
+                {"Tap + ADD SET to start, or DUPLICATE an earlier workout."}
+              </div>
+            </div>
+          )}
 
-          <div style={{ fontSize:9, color:"var(--text-dim)", textAlign:"center", marginTop:6, letterSpacing:"0.08em" }}>
-            Saved directly to Google Sheets
-          </div>
+          {/* Gem-knap */}
+          {entries.length > 0 && (
+            <button
+              style={{...S.btn, width:"100%", opacity: saving ? 0.6 : 1}}
+              onClick={handleSave}
+              disabled={saving}
+            >
+              {saving
+                ? "SAVING..."
+                : "SAVE " + entries.length + " " + (entries.length === 1 ? "SET" : "SETS")}
+            </button>
+          )}
+
 
           {/* Latest sets (this session, already saved) */}
           {localData.length > 0 && (
@@ -2034,9 +2086,18 @@ export default function App() {
                           })}
                         </div>
                       )}
+                      <button style={{...S.btnGhost, width:"100%", fontSize:10, marginBottom:8}}
+                        onClick={() => {
+                          setNewExEquipment(eq);
+                          setShowAddEx(true);
+                          setExpandedEq(null);
+                          setView("exercises");
+                        }}>
+                        {"+ ADD EXERCISE FOR " + eq}
+                      </button>
                       <button style={{...S.btn, width:"100%", fontSize:10}}
                         onClick={() => { setEntry(p => ({...p, equipment: eq})); setView("log"); setExpandedEq(null); }}>
-                        LOG SET WITH {eq} →
+                        {"LOG SET WITH " + eq + " →"}
                       </button>
                     </div>
                   )}
@@ -2209,7 +2270,7 @@ export default function App() {
           <div style={{ marginBottom:10 }}>
             <button style={{...S.btnGhost, width:"100%", padding:"9px", fontSize:10, letterSpacing:"0.08em"}}
               onClick={() => setShowImportSessionToPlan(p => !p)}>
-              {showImportSessionToPlan ? "▲ CLOSE" : "↓ DUPLICATE EARLIER WORKOUT AS STARTING POINT"}
+              {showImportSessionToPlan ? "▲ CLOSE" : "+ DUPLICATE EARLIER WORKOUT AS STARTING POINT"}
             </button>
             {showImportSessionToPlan && (
               <div style={{...S.card, marginTop:6}}>
@@ -2399,11 +2460,11 @@ export default function App() {
           <div style={{...S.grid2, marginBottom:8}}>
             <select style={S.select} value={histEx} onChange={e => setHistEx(e.target.value)}>
               <option value="">All exercises</option>
-              {allExercises.map(ex => <option key={ex}>{ex}</option>)}
+              {histExerciseOptions.map(ex => <option key={ex}>{ex}</option>)}
             </select>
             <select style={S.select} value={histEq} onChange={e => setHistEq(e.target.value)}>
               <option value="">All equipment</option>
-              {allEquipment.map(eq => <option key={eq}>{eq}</option>)}
+              {histEquipmentOptions.map(eq => <option key={eq}>{eq}</option>)}
             </select>
           </div>
           <select style={{...S.select, marginBottom:12, width:"100%"}} value={histCenter} onChange={e => setHistCenter(e.target.value)}>
@@ -2542,7 +2603,7 @@ export default function App() {
                             setExpandedDay(null);
                           }}
                         >
-                          ↓ IMPORT TO LOG
+                          + DUPLICATE TO WORKOUT LOG
                         </button>
                         <button
                           style={{...S.btnGhost, flex:1, padding:"8px", fontSize:10}}
@@ -2876,14 +2937,14 @@ function RepRangeEditor({ initialValue, onSave }) {
       <div style={{ display:"flex", gap:6, alignItems:"center" }}>
         <input
           type="number"
-          style={{ flex:1, background:"var(--bg)", border:`1px solid ${changed ? "var(--accent-border)" : "var(--border-input)"}`, borderRadius:6, padding:"7px 10px", color:"var(--text-primary)", fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box", outline:"none" }}
+          style={{ flex:1, background:"var(--bg)", border:"1px solid " + (changed ? "var(--accent-border)" : "var(--border-input)"), borderRadius:6, padding:"7px 10px", color:"var(--text-primary)", fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box", outline:"none" }}
           value={min} placeholder="MINIMUM" min={1}
           onChange={e => setMin(e.target.value)}
         />
         <span style={{ fontSize:12, color:"var(--text-muted)", flexShrink:0 }}>–</span>
         <input
           type="number"
-          style={{ flex:1, background:"var(--bg)", border:`1px solid ${changed ? "var(--accent-border)" : "var(--border-input)"}`, borderRadius:6, padding:"7px 10px", color:"var(--text-primary)", fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box", outline:"none" }}
+          style={{ flex:1, background:"var(--bg)", border:"1px solid " + (changed ? "var(--accent-border)" : "var(--border-input)"), borderRadius:6, padding:"7px 10px", color:"var(--text-primary)", fontFamily:"'DM Mono', monospace", fontSize:13, boxSizing:"border-box", outline:"none" }}
           value={max} placeholder="MAXIMUM" min={1}
           onChange={e => setMax(e.target.value)}
         />
@@ -2938,7 +2999,7 @@ function VideoRow({ exercise, equipment, handle, existingUrl, onSave }) {
       {/* URL input + knapper */}
       <div style={{ display:"flex", gap:6, alignItems:"center" }}>
         <input
-          style={{ flex:1, background:"var(--bg)", border:`1px solid ${changed ? "var(--accent-border)" : "var(--border-input)"}`,
+          style={{ flex:1, background:"var(--bg)", border:"1px solid " + (changed ? "var(--accent-border)" : "var(--border-input)"),
             borderRadius:6, padding:"7px 10px", color:"var(--text-primary)",
             fontFamily:"'DM Mono', monospace", fontSize:11, boxSizing:"border-box", outline:"none" }}
           value={url}
