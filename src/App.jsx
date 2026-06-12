@@ -156,6 +156,47 @@ async function logSetToSheet(set) {
   });
 }
 
+// Gemmer ALLE sessionens sæt i ÉT kald (ét request, atomisk skrivning i arket).
+// Returnerer { ok, saved } — saved er antal rækker bekræftet skrevet af Apps Script.
+async function logSetBatchToSheet(sets) {
+  if (!isAppsScriptConfigured()) {
+    console.warn("Apps Script URL ikke konfigureret");
+    return { ok: false, saved: 0 };
+  }
+  const payloadSets = sets.map(function(set) {
+    return {
+      dato: set.date,
+      oevelse: set.exercise,
+      redskab: set.equipment,
+      handle: set.handle || "",
+      center: set.center || "",
+      kg: String(set.kg),
+      reps: String(set.reps),
+      repsmaal: set.repsGoal || "",
+      saettype: set.setType || "NORMAL SET",
+      orm: set.oneRepMax != null ? String(set.oneRepMax) : "",
+      noter: set.notes || "",
+    };
+  });
+  try {
+    const res = await fetch(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ type: "set_batch", sets: payloadSets }),
+      redirect: "follow",
+    });
+    if (!res.ok) throw new Error("Apps Script HTTP " + res.status);
+    var json = null;
+    try { json = await res.json(); } catch (parseErr) { json = null; }
+    if (json && json.ok === false) throw new Error(json.error || "Batch save failed");
+    var saved = (json && typeof json.saved === "number") ? json.saved : payloadSets.length;
+    return { ok: true, saved: saved };
+  } catch (e) {
+    console.error("Apps Script batch skrive-fejl:", e);
+    return { ok: false, saved: 0 };
+  }
+}
+
 async function saveExerciseToSheet(exercise) {
   return postToAppsScript({
     type: "exercise",
@@ -1121,11 +1162,18 @@ export default function App() {
       repsGoal: e.repsGoal, setType: e.setType, notes: e.notes,
       oneRepMax: calc1RM(parseFloat(e.kg), parseInt(e.reps)),
     }));
-    // Send alle sæt parallelt direkte til Sheets
-    const results = await Promise.all(records.map(r => logSetToSheet(r)));
-    const allOk = results.every(Boolean);
+    // Send ALLE sæt i ÉT batch-kald — undgår at overbelaste Apps Script med
+    // mange samtidige requests (årsagen til at kun nogle sæt blev gemt).
+    const result = await logSetBatchToSheet(records);
+    setSaving(false);
+    if (!result.ok) {
+      // Intet blev skrevet til arket. Behold ALLE sæt + draft så intet går tabt,
+      // og lad brugeren prøve igen.
+      showToast("⚠ ERROR · NOTHING SAVED — SETS KEPT, TRY AGAIN", false);
+      return;
+    }
+    // Succes: gem lokalt, nulstil til ét tomt sæt (husk smart defaults), ryd draft.
     setLocalData(prev => [...prev, ...records]);
-    // Nulstil til ét tomt sæt — men husk øvelse/redskab/handle/rep range/sæt type fra sidste sæt
     const last = entries[entries.length - 1];
     setEntries([{
       ...blankEntry(),
@@ -1135,15 +1183,8 @@ export default function App() {
       repsGoal: last.repsGoal,
       setType: last.setType,
     }]);
-    setSaving(false);
-    // Ryd draft efter vellykket gem
     try { localStorage.removeItem('st-draft'); } catch(e) {}
-    showToast(
-      allOk
-        ? `${records.length} SETS SAVED ✓`
-        : "⚠ ERROR · DATA IS ONLY SAVED LOCALLY",
-      allOk
-    );
+    showToast(`${result.saved} SETS SAVED ✓`, true);
   }, [entries, sessionDate, sessionCenter]);
 
   // ── Tilføj nyt sæt (arver smart defaults fra det forrige) ──
