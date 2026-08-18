@@ -1380,7 +1380,7 @@ export default function App() {
           </div>
         </div>
         <div style={S.nav}>
-          {[["log","LOG WORKOUT"],["resources","RESOURCES"],["plans","PROGRAM"],["performance","PERFORMANCE"]].map(([k,l]) => (
+          {[["log","LOG WORKOUT"],["performance","PERFORMANCE"],["plans","PROGRAM"],["resources","RESOURCES"]].map(([k,l]) => (
             <button key={k} style={S.navBtn(view===k || (k==="resources" && (view==="exercises" || view==="equipment" || view==="gyms")) || (k==="plans" && (view==="existing-plans" || view==="create-plan")) || (k==="performance" && (view==="history" || view==="insights")))} onClick={() => setView(k === "resources" ? "exercises" : k === "plans" ? "existing-plans" : k === "performance" ? "history" : k)}>{l}</button>
           ))}
         </div>
@@ -1605,6 +1605,20 @@ export default function App() {
               ? "DROP SET"
               : `${typeCount} ${thisType}`;
 
+            // Style til ↑↓ på kollapsede sæt. 40x40 så de kan rammes med
+            // tommelfingeren på mobil uden at ramme kortet bagved.
+            const arrowBtn = (isDisabled) => ({
+              background: isDisabled ? "none" : "var(--accent-bg)",
+              border: "1px solid " + (isDisabled ? "transparent" : "var(--accent-border)"),
+              borderRadius: 8,
+              width: 40, height: 40, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 20, lineHeight: 1, padding: 0,
+              fontFamily: "'DM Mono', monospace",
+              color: isDisabled ? "var(--border)" : "var(--accent)",
+              cursor: isDisabled ? "default" : "pointer",
+            });
+
             return (
               <div key={e.id} style={S.card}>
                 {/* Header: altid synlig — klikbar for at toggle collapse */}
@@ -1617,6 +1631,20 @@ export default function App() {
                   onClick={() => toggleCollapse(e.id)}
                 >
                   <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0, flex:1 }}>
+                    {entries.length > 1 ? (
+                      <button
+                        onClick={(ev) => { ev.stopPropagation(); removeSet(e.id); }}
+                        style={{
+                          background:"none", border:"none", color:"var(--text-faint)",
+                          fontSize:18, lineHeight:1, padding:0, cursor:"pointer",
+                          width:26, height:26, flexShrink:0,
+                          display:"flex", alignItems:"center", justifyContent:"center",
+                          fontFamily:"'DM Mono', monospace",
+                        }}
+                        aria-label="Remove set"
+                        title="Remove set"
+                      >×</button>
+                    ) : null}
                     <span style={{
                       fontSize:9, letterSpacing:"0.12em",
                       color: (SET_TYPE_COLORS[thisType] || SET_TYPE_COLORS["NORMAL SET"]).fg,
@@ -1652,45 +1680,23 @@ export default function App() {
                   </div>
                   <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
                     {(e.collapsed && entries.length > 1) ? (
-                      <span style={{ display:"flex", gap:2, alignItems:"center" }}>
+                      <span style={{ display:"flex", gap:6, alignItems:"center" }}>
                         <button
                           onClick={(ev) => { ev.stopPropagation(); moveEntry(e.id, -1); }}
                           disabled={idx === 0}
-                          style={{
-                            background:"none", border:"none", fontSize:13, padding:"0 3px", lineHeight:1,
-                            fontFamily:"'DM Mono', monospace",
-                            color: idx === 0 ? "var(--border)" : "var(--text-label)",
-                            cursor: idx === 0 ? "default" : "pointer",
-                          }}
+                          style={arrowBtn(idx === 0)}
                           aria-label="Move set up"
                           title="Move up"
                         >{"\u2191"}</button>
                         <button
                           onClick={(ev) => { ev.stopPropagation(); moveEntry(e.id, 1); }}
                           disabled={idx === entries.length - 1}
-                          style={{
-                            background:"none", border:"none", fontSize:13, padding:"0 3px", lineHeight:1,
-                            fontFamily:"'DM Mono', monospace",
-                            color: idx === entries.length - 1 ? "var(--border)" : "var(--text-label)",
-                            cursor: idx === entries.length - 1 ? "default" : "pointer",
-                          }}
+                          style={arrowBtn(idx === entries.length - 1)}
                           aria-label="Move set down"
                           title="Move down"
                         >{"\u2193"}</button>
                       </span>
                     ) : null}
-                    {entries.length > 1 && (
-                      <button
-                        onClick={(ev) => { ev.stopPropagation(); removeSet(e.id); }}
-                        style={{
-                          background:"none", border:"none", color:"var(--text-label)",
-                          fontSize:16, cursor:"pointer", padding:"0 4px", lineHeight:1,
-                          fontFamily:"'DM Mono', monospace",
-                        }}
-                        aria-label="Remove set"
-                        title="Remove set"
-                      >×</button>
-                    )}
                     <span style={{ color:"var(--text-faint)", fontSize:11 }}>{e.collapsed ? "▼" : "▲"}</span>
                   </div>
                 </div>
