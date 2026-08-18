@@ -364,6 +364,15 @@ const ALL_EQUIPMENT = [];
 
 const SET_TYPES = ["NORMAL SET","WARM-UP SET","DROP SET","AMRAP"];
 
+// Ikon pr. set type. Vises i det kollapsede badge i stedet for hele navnet,
+// og ud for SET TYPE-dropdownen i den udfoldede visning.
+const SET_TYPE_ICONS = {
+  "NORMAL SET": "\uD83C\uDFCB\uFE0F",  // vaegtloefter
+  "WARM-UP SET": "\uD83D\uDD25",        // ild
+  "DROP SET": "\uD83D\uDCC9",           // graf nedad
+  "AMRAP": "\uD83C\uDFC1",              // maalflag
+};
+
 // Farver pr. set type — bruges i collapsed badge så typer er visuelt adskilte.
 const SET_TYPE_COLORS = {
   "NORMAL SET": { bg: "var(--accent-bg-mid)", fg: "var(--accent)" },
@@ -1601,20 +1610,23 @@ export default function App() {
             }
             const thisType = e.setType || "NORMAL SET";
             const typeCount = setTypeCounts[thisType];
+            const setIcon = SET_TYPE_ICONS[thisType] || SET_TYPE_ICONS["NORMAL SET"];
+            // Ikon i stedet for hele typenavnet. Taelleren beholdes, saa man
+            // stadig kan se at det fx er 3. normale saet — drop sets taelles ikke.
             const badgeLabel = thisType === "DROP SET"
-              ? "DROP SET"
-              : `${typeCount} ${thisType}`;
+              ? setIcon
+              : setIcon + " " + typeCount;
 
             // ↑↓ på kollapsede sæt. De to knapper sidder i én grå pille, så
             // formen signalerer "kontrol" uden at farven konkurrerer med kortet.
             // 30x28 pr. knap er et fint tryk-mål uden at dominere headeren.
-            // withDivider: tynd streg mellem de to pile, så de er visuelt
-            // adskilt uden at pillen falder fra hinanden i to knapper.
-            const arrowBtn = (isDisabled, withDivider) => ({
-              background: "none",
+            // Hver pil er sin egen lille pille. En delt baggrund fik dem til at
+            // se ud som ét element uanset skillelinje, så de er splittet helt ad.
+            const arrowBtn = (isDisabled) => ({
+              background: isDisabled ? "none" : "var(--border-faint)",
               border: "none",
-              borderRight: withDivider ? "1px solid var(--border)" : "none",
-              width: 34, height: 28, flexShrink: 0,
+              borderRadius: 6,
+              width: 30, height: 28, flexShrink: 0,
               display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: 12, lineHeight: 1, padding: 0,
               fontFamily: "'DM Mono', monospace",
@@ -1639,8 +1651,8 @@ export default function App() {
                         onClick={(ev) => { ev.stopPropagation(); removeSet(e.id); }}
                         style={{
                           background:"none", border:"none", color:"var(--text-faint)",
-                          fontSize:18, lineHeight:1, padding:0, cursor:"pointer",
-                          width:26, height:26, flexShrink:0,
+                          fontSize:15, lineHeight:1, padding:0, cursor:"pointer",
+                          width:18, height:22, flexShrink:0, marginRight:-3,
                           display:"flex", alignItems:"center", justifyContent:"center",
                           fontFamily:"'DM Mono', monospace",
                         }}
@@ -1648,13 +1660,15 @@ export default function App() {
                         title="Remove set"
                       >×</button>
                     ) : null}
-                    <span style={{
-                      fontSize:9, letterSpacing:"0.12em",
-                      color: (SET_TYPE_COLORS[thisType] || SET_TYPE_COLORS["NORMAL SET"]).fg,
-                      background: (SET_TYPE_COLORS[thisType] || SET_TYPE_COLORS["NORMAL SET"]).bg,
-                      padding:"3px 7px", borderRadius:4, fontWeight:600,
-                      flexShrink:0, whiteSpace:"nowrap",
-                    }}>
+                    <span
+                      title={thisType}
+                      style={{
+                        fontSize:11, letterSpacing:"0.04em",
+                        color: (SET_TYPE_COLORS[thisType] || SET_TYPE_COLORS["NORMAL SET"]).fg,
+                        background: (SET_TYPE_COLORS[thisType] || SET_TYPE_COLORS["NORMAL SET"]).bg,
+                        padding:"3px 8px", borderRadius:4, fontWeight:600,
+                        flexShrink:0, whiteSpace:"nowrap",
+                      }}>
                       {badgeLabel}
                     </span>
                     {e.collapsed ? (
@@ -1690,21 +1704,18 @@ export default function App() {
                   </div>
                   <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
                     {(e.collapsed && entries.length > 1) ? (
-                      <span style={{
-                        display:"flex", gap:0, alignItems:"center",
-                        background:"var(--border-faint)", borderRadius:6, overflow:"hidden",
-                      }}>
+                      <span style={{ display:"flex", gap:8, alignItems:"center" }}>
                         <button
                           onClick={(ev) => { ev.stopPropagation(); moveEntry(e.id, -1); }}
                           disabled={idx === 0}
-                          style={arrowBtn(idx === 0, true)}
+                          style={arrowBtn(idx === 0)}
                           aria-label="Move set up"
                           title="Move up"
                         >{"\u2191"}</button>
                         <button
                           onClick={(ev) => { ev.stopPropagation(); moveEntry(e.id, 1); }}
                           disabled={idx === entries.length - 1}
-                          style={arrowBtn(idx === entries.length - 1, false)}
+                          style={arrowBtn(idx === entries.length - 1)}
                           aria-label="Move set down"
                           title="Move down"
                         >{"\u2193"}</button>
@@ -1800,7 +1811,14 @@ export default function App() {
 
                     {/* SET TYPE — altid synlig */}
                     <div style={{ marginBottom:10 }}>
-                      <label style={S.label}>SET TYPE</label>
+                      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                        <label style={S.label}>SET TYPE</label>
+                        {e.setType ? (
+                          <span style={{ fontSize:13, lineHeight:1 }}>
+                            {SET_TYPE_ICONS[e.setType] || SET_TYPE_ICONS["NORMAL SET"]}
+                          </span>
+                        ) : null}
+                      </div>
                       <select style={S.select} value={e.setType}
                         onChange={ev => updateEntry(e.id, { setType: ev.target.value })}>
                         {SET_TYPES.map(t => <option key={t}>{t}</option>)}
