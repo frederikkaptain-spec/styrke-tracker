@@ -1605,17 +1605,17 @@ export default function App() {
               ? "DROP SET"
               : `${typeCount} ${thisType}`;
 
-            // Style til ↑↓ på kollapsede sæt. 40x40 så de kan rammes med
-            // tommelfingeren på mobil uden at ramme kortet bagved.
+            // ↑↓ på kollapsede sæt. De to knapper sidder i én grå pille, så
+            // formen signalerer "kontrol" uden at farven konkurrerer med kortet.
+            // 30x28 pr. knap er et fint tryk-mål uden at dominere headeren.
             const arrowBtn = (isDisabled) => ({
-              background: isDisabled ? "none" : "var(--accent-bg)",
-              border: "1px solid " + (isDisabled ? "transparent" : "var(--accent-border)"),
-              borderRadius: 8,
-              width: 40, height: 40, flexShrink: 0,
+              background: "none",
+              border: "none",
+              width: 30, height: 28, flexShrink: 0,
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 20, lineHeight: 1, padding: 0,
+              fontSize: 12, lineHeight: 1, padding: 0,
               fontFamily: "'DM Mono', monospace",
-              color: isDisabled ? "var(--border)" : "var(--accent)",
+              color: isDisabled ? "var(--border)" : "var(--text-muted)",
               cursor: isDisabled ? "default" : "pointer",
             });
 
@@ -1662,8 +1662,15 @@ export default function App() {
                             <span style={{ color:"var(--text-primary)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
                               {e.exercise}
                             </span>
-                            <span style={{ color:"var(--accent)", fontWeight:600, whiteSpace:"nowrap" }}>
-                              {e.kg}×{e.reps}
+                            <span style={{
+                              display:"flex", alignItems:"baseline", gap:2,
+                              whiteSpace:"nowrap", flexShrink:0,
+                            }}>
+                              <span style={{ color:"var(--accent)", fontWeight:600 }}>{e.kg}</span>
+                              <span style={{ fontSize:8, fontWeight:400, color:"var(--text-muted)", letterSpacing:"0.1em" }}>{"KG"}</span>
+                              <span style={{ color:"var(--text-faint)", fontWeight:400, margin:"0 3px" }}>{"\u00d7"}</span>
+                              <span style={{ color:"var(--accent)", fontWeight:600 }}>{e.reps}</span>
+                              <span style={{ fontSize:8, fontWeight:400, color:"var(--text-muted)", letterSpacing:"0.1em" }}>{"REPS"}</span>
                             </span>
                           </div>
                         ) : (
@@ -1680,7 +1687,10 @@ export default function App() {
                   </div>
                   <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
                     {(e.collapsed && entries.length > 1) ? (
-                      <span style={{ display:"flex", gap:6, alignItems:"center" }}>
+                      <span style={{
+                        display:"flex", gap:0, alignItems:"center",
+                        background:"var(--border-faint)", borderRadius:6, overflow:"hidden",
+                      }}>
                         <button
                           onClick={(ev) => { ev.stopPropagation(); moveEntry(e.id, -1); }}
                           disabled={idx === 0}
