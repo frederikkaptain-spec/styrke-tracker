@@ -312,6 +312,34 @@ function buildRepRange(min, max) {
   return `${m}-${x}`;
 }
 
+// ─── ANBEFALET ARBEJDSVÆGT ────────────────────────────────────────────────────
+// Epley omvendt: kg = 1RM / (1 + (reps + RIR)/30)
+// RIR = reps in reserve. Skal matche BEST1RM_RIR i Apps Script, så app og ark
+// viser de samme tal.
+const REC_WEIGHT_RIR = 2;
+
+function weightForReps(oneRm, reps) {
+  if (!oneRm || !reps || reps <= 0) return null;
+  return Math.round((oneRm / (1 + (reps + REC_WEIGHT_RIR) / 30)) * 2) / 2;
+}
+
+// Returnerer fx "36-45 kg" ud fra bedste 1RM og et rep range som "8-15".
+// Tungeste vægt hører til færreste reps, så range vendes til lav-høj.
+function recWeightRange(oneRm, repRange) {
+  if (!oneRm || !repRange) return null;
+  if (/sek/i.test(repRange)) return null; // "30-60 sek." er tid, ikke reps
+  const parsed = parseRepRange(repRange);
+  const lo = parseInt(parsed.min, 10);
+  const hi = parseInt(parsed.max, 10);
+  if (!lo || lo <= 0) return null;
+  const heavy = weightForReps(oneRm, lo);
+  if (!heavy) return null;
+  if (!hi || hi <= lo) return heavy + " kg";
+  const light = weightForReps(oneRm, hi);
+  if (!light) return heavy + " kg";
+  return light + "-" + heavy + " kg";
+}
+
 // ─── HISTORISK DATA ───────────────────────────────────────────────────────────
 // Sheet er nu eneste kilde for både øvelser, redskaber og træningsdata.
 const SEED_DATA = [];
@@ -969,6 +997,24 @@ export default function App() {
     return best;
   }, [best1RMMap]);
 
+  // Til vægtanbefaling: brug sessionens center hvis det er valgt, ellers bedste
+  // på tværs af centre for samme øvelse+redskab+handle (handle bevares altid,
+  // da rope/bar/handle giver markant forskellige tal).
+  const getBest1RMForRec = useCallback((exercise, equipment, handle, center) => {
+    if (!exercise || !equipment) return null;
+    const h = handle || "";
+    if (center) return best1RMMap[exercise + "||" + equipment + "||" + h + "||" + center] || null;
+    const prefix = exercise + "||" + equipment + "||" + h + "||";
+    let best = null;
+    for (const key in best1RMMap) {
+      if (key.indexOf(prefix) === 0) {
+        const v = best1RMMap[key];
+        if (best == null || v > best) best = v;
+      }
+    }
+    return best;
+  }, [best1RMMap]);
+
   // ── Grupperet pr. dag (til Historik + Import) ──
   const daysGrouped = useMemo(() => {
     const map = new Map();
@@ -1511,6 +1557,9 @@ export default function App() {
           {entries.map((e, idx) => {
             const eLiveOrm = calc1RM(parseFloat(e.kg), parseInt(e.reps));
             const eBestOrm = getBest1RM(e.exercise, e.equipment, e.handle, sessionCenter);
+            const eRecOrm = getBest1RMForRec(e.exercise, e.equipment, e.handle, sessionCenter);
+            const eRecWeight = (e.exercise && e.equipment && e.setType)
+              ? recWeightRange(eRecOrm, e.repsGoal) : null;
             const eEquipForExercise = getEquipForExercise(e.exercise);
             const isComplete = e.exercise && e.kg && e.reps;
 
@@ -1655,12 +1704,17 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* REP RANGE read-only */}
+                    {/* REC. REP RANGE + REC. WEIGHT read-only */}
                     {e.repsGoal && (
                       <div style={{ marginBottom:10, padding:"6px 10px", background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:4 }}>
                         <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.1em" }}>
-                          REP RANGE: <span style={{ color:"var(--accent)", fontWeight:600 }}>{e.repsGoal}</span>
+                          REC. REP RANGE: <span style={{ color:"var(--accent)", fontWeight:600 }}>{e.repsGoal}</span>
                         </div>
+                        {eRecWeight ? (
+                          <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.1em", marginTop:4 }}>
+                            REC. WEIGHT: <span style={{ color:"var(--accent)", fontWeight:600 }}>{eRecWeight}</span>
+                          </div>
+                        ) : null}
                       </div>
                     )}
 
