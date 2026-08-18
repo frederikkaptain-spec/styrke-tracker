@@ -1608,10 +1608,13 @@ export default function App() {
             // ↑↓ på kollapsede sæt. De to knapper sidder i én grå pille, så
             // formen signalerer "kontrol" uden at farven konkurrerer med kortet.
             // 30x28 pr. knap er et fint tryk-mål uden at dominere headeren.
-            const arrowBtn = (isDisabled) => ({
+            // withDivider: tynd streg mellem de to pile, så de er visuelt
+            // adskilt uden at pillen falder fra hinanden i to knapper.
+            const arrowBtn = (isDisabled, withDivider) => ({
               background: "none",
               border: "none",
-              width: 30, height: 28, flexShrink: 0,
+              borderRight: withDivider ? "1px solid var(--border)" : "none",
+              width: 34, height: 28, flexShrink: 0,
               display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: 12, lineHeight: 1, padding: 0,
               fontFamily: "'DM Mono', monospace",
@@ -1694,14 +1697,14 @@ export default function App() {
                         <button
                           onClick={(ev) => { ev.stopPropagation(); moveEntry(e.id, -1); }}
                           disabled={idx === 0}
-                          style={arrowBtn(idx === 0)}
+                          style={arrowBtn(idx === 0, true)}
                           aria-label="Move set up"
                           title="Move up"
                         >{"\u2191"}</button>
                         <button
                           onClick={(ev) => { ev.stopPropagation(); moveEntry(e.id, 1); }}
                           disabled={idx === entries.length - 1}
-                          style={arrowBtn(idx === entries.length - 1)}
+                          style={arrowBtn(idx === entries.length - 1, false)}
                           aria-label="Move set down"
                           title="Move down"
                         >{"\u2193"}</button>
