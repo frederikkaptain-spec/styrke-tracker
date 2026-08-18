@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 // ─── GOOGLE APPS SCRIPT ENDPOINT ──────────────────────────────────────────────
 // Apps Script deployed som Web App. Læser og skriver alle data via dette ene endpoint.
 // Sæt URL'en ind her efter du har deployet scriptet (se SHEETS_WRITE_SETUP.md).
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzBJ4_R4nTNkHmRLk6u-5IURCiz8KaEoLt3iN-S8NrdjRurZTdEASZUZvZcs_-Ko2sM/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyFk6LdkFMKMAw7dlI6YJL1aMAKjQ9gjlKg3oXJlrRrpY-fG4YhXVQFg7OfuFh1V1lI/exec";
 
 // Fallback til CSV-eksport hvis Apps Script-læsning ikke er konfigureret/fejler.
 // Kræver at sheet er delt som "Anyone with the link can view".
@@ -325,6 +325,18 @@ function weightForReps(oneRm, reps) {
 
 // Returnerer fx "36-45 kg" ud fra bedste 1RM og et rep range som "8-15".
 // Tungeste vægt hører til færreste reps, så range vendes til lav-høj.
+// Drop set: 10-20% lettere end det foregående sæt.
+// Bruger det faktisk indtastede kg, ikke 1RM — et drop set hænger sammen
+// med sættet lige før, ikke med historikken.
+function dropSetRange(prevKg) {
+  const kg = parseFloat(prevKg);
+  if (!kg || kg <= 0) return null;
+  const low = Math.round(kg * 0.8 * 2) / 2;
+  const high = Math.round(kg * 0.9 * 2) / 2;
+  if (low >= high) return low + " kg";
+  return low + "-" + high + " kg";
+}
+
 function recWeightRange(oneRm, repRange) {
   if (!oneRm || !repRange) return null;
   if (/sek/i.test(repRange)) return null; // "30-60 sek." er tid, ikke reps
@@ -1253,6 +1265,21 @@ export default function App() {
   }, []);
 
   // ── Fjern et sæt ──
+  // Byt et sæt med naboen. Bruges af ↑↓ på de kollapsede sæt.
+  const moveEntry = useCallback((id, dir) => {
+    setEntries(prev => {
+      const idx = prev.findIndex(x => x.id === id);
+      if (idx < 0) return prev;
+      const newIdx = idx + dir;
+      if (newIdx < 0 || newIdx >= prev.length) return prev;
+      const next = [...prev];
+      const tmp = next[idx];
+      next[idx] = next[newIdx];
+      next[newIdx] = tmp;
+      return next;
+    });
+  }, []);
+
   const removeSet = useCallback((id) => {
     setEntries(prev => {
       if (prev.length === 1) {
@@ -1558,8 +1585,11 @@ export default function App() {
             const eLiveOrm = calc1RM(parseFloat(e.kg), parseInt(e.reps));
             const eBestOrm = getBest1RM(e.exercise, e.equipment, e.handle, sessionCenter);
             const eRecOrm = getBest1RMForRec(e.exercise, e.equipment, e.handle, sessionCenter);
+            const eIsDrop = e.setType === "DROP SET";
+            const ePrevKg = idx > 0 ? entries[idx - 1].kg : "";
             const eRecWeight = (e.exercise && e.equipment && e.setType)
-              ? recWeightRange(eRecOrm, e.repsGoal) : null;
+              ? (eIsDrop ? dropSetRange(ePrevKg) : recWeightRange(eRecOrm, e.repsGoal))
+              : null;
             const eEquipForExercise = getEquipForExercise(e.exercise);
             const isComplete = e.exercise && e.kg && e.reps;
 
@@ -1621,6 +1651,34 @@ export default function App() {
                     )}
                   </div>
                   <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+                    {(e.collapsed && entries.length > 1) ? (
+                      <span style={{ display:"flex", gap:2, alignItems:"center" }}>
+                        <button
+                          onClick={(ev) => { ev.stopPropagation(); moveEntry(e.id, -1); }}
+                          disabled={idx === 0}
+                          style={{
+                            background:"none", border:"none", fontSize:13, padding:"0 3px", lineHeight:1,
+                            fontFamily:"'DM Mono', monospace",
+                            color: idx === 0 ? "var(--border)" : "var(--text-label)",
+                            cursor: idx === 0 ? "default" : "pointer",
+                          }}
+                          aria-label="Move set up"
+                          title="Move up"
+                        >{"\u2191"}</button>
+                        <button
+                          onClick={(ev) => { ev.stopPropagation(); moveEntry(e.id, 1); }}
+                          disabled={idx === entries.length - 1}
+                          style={{
+                            background:"none", border:"none", fontSize:13, padding:"0 3px", lineHeight:1,
+                            fontFamily:"'DM Mono', monospace",
+                            color: idx === entries.length - 1 ? "var(--border)" : "var(--text-label)",
+                            cursor: idx === entries.length - 1 ? "default" : "pointer",
+                          }}
+                          aria-label="Move set down"
+                          title="Move down"
+                        >{"\u2193"}</button>
+                      </span>
+                    ) : null}
                     {entries.length > 1 && (
                       <button
                         onClick={(ev) => { ev.stopPropagation(); removeSet(e.id); }}
@@ -1705,18 +1763,21 @@ export default function App() {
                     )}
 
                     {/* REC. REP RANGE + REC. WEIGHT read-only */}
-                    {e.repsGoal && (
+                    {(e.repsGoal || eRecWeight) ? (
                       <div style={{ marginBottom:10, padding:"6px 10px", background:"var(--accent-bg)", border:"1px solid var(--accent-border)", borderRadius:4 }}>
-                        <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.1em" }}>
-                          REC. REP RANGE: <span style={{ color:"var(--accent)", fontWeight:600 }}>{e.repsGoal}</span>
-                        </div>
+                        {e.repsGoal ? (
+                          <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.1em" }}>
+                            REC. REP RANGE: <span style={{ color:"var(--accent)", fontWeight:600 }}>{e.repsGoal}</span>
+                          </div>
+                        ) : null}
                         {eRecWeight ? (
-                          <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.1em", marginTop:4 }}>
+                          <div style={{ fontSize:9, color:"var(--accent-dim)", letterSpacing:"0.1em", marginTop: e.repsGoal ? 4 : 0 }}>
                             REC. WEIGHT: <span style={{ color:"var(--accent)", fontWeight:600 }}>{eRecWeight}</span>
+                            {eIsDrop ? <span style={{ color:"var(--accent-dim)", fontWeight:400 }}> {"(-10-20% VS. PREV. SET)"}</span> : null}
                           </div>
                         ) : null}
                       </div>
-                    )}
+                    ) : null}
 
                     {/* SET TYPE — altid synlig */}
                     <div style={{ marginBottom:10 }}>
@@ -2754,6 +2815,7 @@ function InsightsView({ allRecords, exerciseDetailCache, loadExerciseDetail, get
   const [insightsTab, setInsightsTab] = useState("stats"); // "stats" | "history"
   const [histEx, setHistEx] = useState("");
   const [histEq, setHistEq] = useState("");
+  const [statsCenter, setStatsCenter] = useState("");
 
   const exercisesWithData = [...new Set(allRecords.filter(r => r.oneRepMax).map(r => r.exercise).filter(Boolean))].sort();
   const allExercisesInHistory = [...new Set(allRecords.map(r => r.exercise).filter(Boolean))].sort();
@@ -2768,6 +2830,15 @@ function InsightsView({ allRecords, exerciseDetailCache, loadExerciseDetail, get
       setStatsEx(exercisesWithData[0]);
     }
   }, [exercisesWithData.length]);
+
+  // Centre hvor den valgte øvelse faktisk er logget. Tom = på tværs af centre.
+  const statsCentersForEx = [...new Set(
+    allRecords.filter(r => r.exercise === statsEx && r.oneRepMax).map(r => r.center).filter(Boolean)
+  )].sort();
+
+  // Hvis det valgte center ikke findes for den nye øvelse, falder vi tilbage
+  // til på tværs af centre i stedet for at vise en tom graf.
+  const statsCenterActive = statsCentersForEx.indexOf(statsCenter) >= 0 ? statsCenter : "";
 
   // Filtrer historik
   const historyRecords = allRecords.filter(r =>
@@ -2817,9 +2888,20 @@ function InsightsView({ allRecords, exerciseDetailCache, loadExerciseDetail, get
               </div>
             )}
           </div>
+          {statsCentersForEx.length > 1 ? (
+            <div style={{ marginBottom:12 }}>
+              <label style={S.label}>GYM</label>
+              <select style={S.select} value={statsCenterActive}
+                onChange={e => setStatsCenter(e.target.value)}>
+                <option value="">All gyms (combined)</option>
+                {statsCentersForEx.map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+          ) : null}
           {statsEx && (
             <StatsView
               exercise={statsEx}
+              center={statsCenterActive}
               allRecords={getRecordsForExercise(statsEx)}
               best1RMMap={best1RMMap}
             />
@@ -2881,15 +2963,28 @@ function InsightsView({ allRecords, exerciseDetailCache, loadExerciseDetail, get
 
 // ─── STATS VIEW ───────────────────────────────────────────────────────────────
 // Viser progression pr. (equipment + handle) — cable tower splittes pr. handle
-function StatsView({ exercise, allRecords, best1RMMap }) {
+function StatsView({ exercise, center, allRecords, best1RMMap }) {
   const [showAllKey, setShowAllKey] = useState({});
-  const records = allRecords.filter(r => r.exercise === exercise && r.oneRepMax);
+  // Er et center valgt, ses kun det centers sæt. Er intet valgt, ses kurverne
+  // på tværs af centre som før.
+  const records = allRecords.filter(r =>
+    r.exercise === exercise && r.oneRepMax && (!center || r.center === center)
+  );
 
-  // Gruppe-nøgle: equipment + handle hvis handle er sat, ellers bare equipment
-  const groupKeys = [...new Set(records.map(r => {
-    const h = r.handle ? ` · ${r.handle}` : "";
-    return `${r.equipment}${h}`;
-  }).filter(Boolean))].sort();
+  // Gruppér på equipment + handle. Center er allerede filtreret fra oven,
+  // så en kurve dækker enten ét valgt center eller alle centre samlet.
+  const groups = [];
+  const seenGroup = {};
+  for (const r of records) {
+    const gEq = r.equipment || "";
+    if (!gEq) continue;
+    const gHandle = r.handle || "";
+    const gKey = gEq + "||" + gHandle;
+    if (seenGroup[gKey]) continue;
+    seenGroup[gKey] = true;
+    groups.push({ key: gKey, eq: gEq, handle: gHandle });
+  }
+  groups.sort((a, b) => a.key.localeCompare(b.key));
 
   if (!records.length) return (
     <div style={{ color:"var(--text-faint)", fontSize:12, textAlign:"center", marginTop:40 }}>
@@ -2899,11 +2994,10 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
 
   return (
     <div>
-      {groupKeys.map(groupKey => {
-        // Split gruppe-nøgle tilbage til equipment + handle
-        const dotIdx = groupKey.indexOf(" · ");
-        const eq = dotIdx >= 0 ? groupKey.slice(0, dotIdx) : groupKey;
-        const handle = dotIdx >= 0 ? groupKey.slice(dotIdx + 3) : "";
+      {groups.map(g => {
+        const groupKey = g.key;
+        const eq = g.eq;
+        const handle = g.handle;
 
         const groupRecs = records.filter(r => {
           const matchEq = r.equipment === eq;
@@ -2924,8 +3018,20 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
         if (!recs.length) return null;
 
         // Bedste 1RM for denne gruppe fra server-map
-        const mapKey = `${exercise}||${eq}||${handle}||`;
-        let best = best1RMMap[mapKey] || null;
+        // Med valgt center rammer vi nøglen præcist. Uden center tages max
+        // på tværs af alle centre for samme øvelse+redskab+handle.
+        let best = null;
+        if (center) {
+          best = best1RMMap[exercise + "||" + eq + "||" + handle + "||" + center] || null;
+        } else {
+          const bestPrefix = exercise + "||" + eq + "||" + handle + "||";
+          for (const bk in best1RMMap) {
+            if (bk.indexOf(bestPrefix) === 0) {
+              const bv = best1RMMap[bk];
+              if (best == null || bv > best) best = bv;
+            }
+          }
+        }
         // Fallback: beregn fra records
         if (!best) {
           for (const r of groupRecs) {
@@ -2946,6 +3052,7 @@ function StatsView({ exercise, allRecords, best1RMMap }) {
                   {handle}
                 </div>
               )}
+
             </div>
 
             {/* Bedste 1RM + opvarmning */}
